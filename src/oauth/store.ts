@@ -24,6 +24,8 @@ export interface AuthCode {
   resource?: string;
   email: string;
   name: string;
+  /** Notion sendet beim Authorize-Request eine notion_user_id — durchgereicht bis in den JWT. */
+  notionUserId?: string;
   expiresAt: number; // unix ms
 }
 
@@ -33,6 +35,7 @@ export interface RefreshToken {
   name: string;
   scope?: string;
   resource?: string;
+  notionUserId?: string;
   expiresAt: number; // unix ms
 }
 
@@ -43,6 +46,7 @@ export interface PendingAuth {
   codeChallenge: string;
   scope?: string;
   resource?: string;
+  notionUserId?: string;
   expiresAt: number; // unix ms
 }
 

@@ -4,40 +4,12 @@ import { randomToken } from './pkce.js';
 import { getClient, getPendingAuth, pendingAuths, authCodes, users, type PendingAuth, type User } from './store.js';
 import { getSession, setSession } from './session.js';
 import { log } from '../util/log.js';
+import { escapeHtml, page } from '../util/html.js';
 
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const CODE_TTL_MS = 10 * 60 * 1000;
 
-// ─── HTML (minimal, inline CSS) ─────────────────────────────────────────────
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function page(title: string, body: string): string {
-  return `<!doctype html>
-<html lang="de">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} · test-dcr-mcp-server</title>
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-  .card { background: #1e293b; border-radius: 12px; padding: 2rem; width: 100%; max-width: 380px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
-  h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
-  .sub { color: #94a3b8; font-size: .85rem; margin-bottom: 1.5rem; }
-  label { display: block; font-size: .8rem; color: #94a3b8; margin: .75rem 0 .25rem; }
-  input { width: 100%; box-sizing: border-box; padding: .6rem .75rem; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 1rem; }
-  input:focus { outline: 2px solid #38bdf8; border-color: transparent; }
-  button { width: 100%; margin-top: 1.25rem; padding: .65rem; border: 0; border-radius: 8px; background: #38bdf8; color: #082f49; font-weight: 600; font-size: 1rem; cursor: pointer; }
-  button:hover { background: #7dd3fc; }
-  .error { background: #7f1d1d; color: #fecaca; border-radius: 8px; padding: .5rem .75rem; font-size: .85rem; margin-top: 1rem; }
-  .meta { font-size: .75rem; color: #64748b; margin-top: 1.5rem; word-break: break-all; }
-</style>
-</head>
-<body><div class="card">${body}</div></body>
-</html>`;
-}
+// ─── HTML ────────────────────────────────────────────────────────────────────
 
 function renderLoginForm(res: Response, txn: string, clientName: string | undefined, scope: string | undefined, error?: string): void {
   const body = `
@@ -88,12 +60,13 @@ function issueCodeAndRedirect(res: Response, pending: PendingAuth, user: User): 
     resource: pending.resource,
     email: user.email,
     name: user.name,
+    notionUserId: pending.notionUserId,
     expiresAt: Date.now() + CODE_TTL_MS,
   });
   const url = new URL(pending.redirectUri);
   url.searchParams.set('code', code);
   if (pending.state !== undefined) url.searchParams.set('state', pending.state);
-  log('info', 'Authorize: Code ausgestellt', { clientId: pending.clientId, email: user.email, scope: pending.scope, resource: pending.resource });
+  log('info', 'Authorize: Code ausgestellt', { clientId: pending.clientId, email: user.email, scope: pending.scope, resource: pending.resource, notionUserId: pending.notionUserId });
   res.redirect(302, url.toString());
 }
 
@@ -109,6 +82,11 @@ export function authorizeGetHandler(req: Request, res: Response): void {
   const codeChallengeMethod = firstParam(q.code_challenge_method);
   const scope = firstParam(q.scope);
   const resource = firstParam(q.resource);
+  // Notion-spezifisch: wird beim Authorize-Request mitgeschickt (Identität des Notion-Nutzers)
+  const notionUserId = firstParam(q.notion_user_id);
+  if (notionUserId) {
+    log('info', 'Authorize: notion_user_id empfangen', { notionUserId, clientId });
+  }
 
   // 1) client_id prüfen — vor jedem Redirect, Fehler als HTML-Seite
   if (!clientId) {
@@ -150,6 +128,7 @@ export function authorizeGetHandler(req: Request, res: Response): void {
     codeChallenge,
     scope,
     resource,
+    notionUserId,
     expiresAt: Date.now() + PENDING_TTL_MS,
   };
   pendingAuths.set(txn, pending);

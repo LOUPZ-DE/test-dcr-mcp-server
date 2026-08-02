@@ -166,10 +166,11 @@ cloudflared tunnel --url http://localhost:3000
 
 Voraussetzung: Ein Owner/Admin hat **Custom MCP servers** freigeschaltet (`Settings → Notion AI → AI connectors → Enable Custom MCP servers`).
 
-1. `Settings → Notion AI → AI connectors → Custom MCP servers` → Server per URL hinzufügen: `https://<domain>/mcp`
+1. `Settings → Notion AI → AI connectors → Custom MCP servers` → Server per URL hinzufügen: **`https://<domain>/mcp`** — die URL **vollständig inkl. `/mcp`** eintragen! (Notion verwendet die eingegebene URL als MCP-Endpunkt; bei Root-URL landet der Traffic auf `POST /` → 404, siehe „Erkenntnisse" unten.)
 2. Es erscheint ein **„Sign in with OAuth"-Button** (kein Token-Feld).
 3. Klick → Browser → Login-Formular (E-Mail/Passwort aus `USERS_JSON`) → Redirect zurück.
-4. Server erscheint unter *All sources → MCP servers*; `whoami` liefert die Identität des angemeldeten Nutzers.
+4. Server erscheint unter *All sources → MCP servers*; `whoami` liefert die Identität des angemeldeten Nutzers (`email`/`name` aus `USERS_JSON`) plus die `notionUserId` des verbindenden Notion-Accounts.
+5. **Tools erscheinen lazy:** Notion ruft `tools/list` erst auf, wenn ein Agent die Quelle benutzt. Test-Prompt: *„Welche Tools stellt der Test-DCR-MCP-Server bereit? Rufe dann das Tool whoami auf."*
 
 **Im Server-Log beobachten** (alles JSON-Zeilen): der initiale 401, PRM-Fetch, AS-Metadata-Fetch, **der DCR-Body mit Notions echten `redirect_uris`**, Authorize/Login, Token-Exchange — und nach 60 s (bei `ACCESS_TOKEN_TTL=60`) der selbstständige Refresh durch Notion.
 
@@ -179,6 +180,43 @@ Voraussetzung: Ein Owner/Admin hat **Custom MCP servers** freigeschaltet (`Setti
 - **Was wird wo gespeichert?** Access Tokens (JWT) nirgends — nur signiert/verifiziert. Refresh Tokens, DCR-Clients, Auth-Codes, Pending-Logins in Maps; davon werden Clients + Refresh-Tokens ins `STATE_FILE` persistiert (debounced, atomar via tmp+rename). Auth-Codes/Pending (10-min-TTL) bleiben bewusst flüchtig. Nutzer kommen immer aus `USERS_JSON`.
 - **Login-Session**: HMAC-signiertes Cookie (`HttpOnly; SameSite=Lax`; `Secure` nur bei HTTPS), damit nachfolgende Authorize-Requests das Formular überspringen.
 - **Express 5**, weil `@modelcontextprotocol/sdk` selbst davon abhängt (keine Duplikat-Installation, `req.auth`-Augment greift).
+
+## Erkenntnisse aus dem Notion-E2E-Test (gemessen, nicht geraten)
+
+Alles Folgende stammt aus den Request-Logs eines echten Connects mit Notion Custom Agents (Stand 2026-08):
+
+### Discovery & DCR
+
+- **DCR ohne Vorab-Registrierung funktioniert.** Notion registriert sich selbst mit `client_name: "Notion"`, `token_endpoint_auth_method: "none"`, Scope `mcp`.
+- **Notions Redirect-URI:** `https://app.notion.com/workflows/mcp/oauth/callback`
+- User-Agent der serverseitigen Calls: `Notion-MCP-Client/1.0`.
+- Notion probiert zusätzlich `GET /.well-known/mcp.json` sowie `HEAD/GET /` — 404 ist ok, bricht nichts.
+
+### Authorize-Request — Notion sendet Extra-Parameter
+
+```
+response_type=code, client_id, redirect_uri, state,
+code_challenge, code_challenge_method=S256,
+scope=mcp, resource=<siehe unten>,
+nonce=<…>, prompt=consent,
+notion_user_id=<UUID des Notion-Nutzers>
+```
+
+- **`notion_user_id`** ist die Notion-User-ID der Person, die den Connector verbindet. Dieser Server reicht sie als Custom Claim `notion_user_id` in den JWT durch — `whoami` zeigt sie an. Damit kann ein MCP-Server **pro Notion-Nutzer unterscheiden**, auch wenn alle dasselbe Server-Login nutzen. (Achtung: der Wert kommt aus einem Query-Parameter am Authorize-Endpoint — für ernsthafte Nutzung wäre er zu verifizieren, für Identitäts-Experimente reicht er.)
+- `nonce` und `prompt=consent` werden ebenfalls mitgeschickt (OIDC-Anklänge), müssen aber nicht ausgewertet werden.
+
+### ⚠️ Wichtigster Praxis-Punkt: die eingegebene URL IST der Endpunkt
+
+- Notion verwendet die **beim Anlegen des Connectors eingegebene URL** als Endpunkt für den gesamten MCP-Traffic — und auch als RFC-8707-`resource`-Parameter im ganzen Flow.
+- Wird der Connector **mit der Root-URL** (`https://host/`) eingetragen, sendet Notion seine JSON-RPC-Calls an **`POST /`** — nicht an `/mcp`. Symptom im Notion-Agent: *„Failed to connect to MCP server"*, im Server-Log: `POST / → 404` (und davor erfolgreiche Token-Refreshes — der OAuth-Teil läuft ja).
+- **Lösung: Connector mit der vollen URL inkl. Pfad eintragen, also `https://host/mcp`.** Dieser Server liefert MCP bewusst nur auf `/mcp` aus (kein Root-Mount), damit das Muster auch auf Hosts mit herkömmlicher API auf `/` sauber bleibt. `GET /` zeigt eine HTML-Info-Seite mit der korrekten URL.
+- Der `resource`-Parameter folgt derselben Regel: bei Eintrag mit `/mcp` kommt `resource=…/mcp`, bei Root-Eintrag `resource=…/`. Dieser Server akzeptiert beide und loggt Mismatches (Lernmodus).
+
+### Token-Verhalten
+
+- **Notion refresht sofort nach dem Connect mehrfach** (parallel/ redundante Worker) — Refresh-Rotation muss also sauber funktionieren, sonst bricht die Verbindung direkt nach dem Aufbau.
+- Danach wird der Refresh-Grant bei kurzer `ACCESS_TOKEN_TTL` (60 s) erwartungsgemäß vor jedem weiteren MCP-Call genutzt.
+- PKCE ist S256, Code-Exchange sofort nach Redirect. Alles standardkonform.
 
 ## Bekannte Grenzen (bewusst)
 

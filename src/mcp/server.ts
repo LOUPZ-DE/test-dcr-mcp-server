@@ -22,6 +22,7 @@ function createMcpServer(): McpServer {
       const identity = {
         email: authInfo.extra?.email,
         name: authInfo.extra?.name,
+        notionUserId: authInfo.extra?.notionUserId,
         clientId: authInfo.clientId,
         scopes: authInfo.scopes,
         expiresAt: authInfo.expiresAt ? new Date(authInfo.expiresAt * 1000).toISOString() : undefined,

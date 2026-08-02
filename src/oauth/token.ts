@@ -24,7 +24,7 @@ function tokenError(res: Response, error: string, description: string): void {
 }
 
 async function issueTokenPair(res: Response, params: {
-  clientId: string; email: string; name: string; scope?: string; resource?: string;
+  clientId: string; email: string; name: string; scope?: string; resource?: string; notionUserId?: string;
 }): Promise<void> {
   const accessToken = await signAccessToken({
     email: params.email,
@@ -32,6 +32,7 @@ async function issueTokenPair(res: Response, params: {
     clientId: params.clientId,
     scope: params.scope,
     resource: params.resource,
+    notionUserId: params.notionUserId,
   });
   const refreshToken = randomToken(32);
   refreshTokens.set(refreshToken, {
@@ -40,6 +41,7 @@ async function issueTokenPair(res: Response, params: {
     name: params.name,
     scope: params.scope,
     resource: params.resource,
+    notionUserId: params.notionUserId,
     expiresAt: Date.now() + config.REFRESH_TOKEN_TTL * 1000,
   });
   scheduleSave();
@@ -109,6 +111,7 @@ export async function tokenHandler(req: Request, res: Response): Promise<void> {
       name: stored.name,
       scope: stored.scope,
       resource: stored.resource,
+      notionUserId: stored.notionUserId,
     });
     return;
   }
@@ -133,6 +136,7 @@ export async function tokenHandler(req: Request, res: Response): Promise<void> {
       name: stored.name,
       scope: stored.scope,
       resource: stored.resource,
+      notionUserId: stored.notionUserId,
     });
     return;
   }

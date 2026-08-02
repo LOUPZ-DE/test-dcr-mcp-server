@@ -3,6 +3,7 @@ import cors from 'cors';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { config } from './config.js';
 import { log, requestLogger } from './util/log.js';
+import { escapeHtml, widePage } from './util/html.js';
 import { loadState } from './oauth/store.js';
 import { JwtVerifier } from './oauth/jwt.js';
 import { prmHandler, asMetadataHandler } from './oauth/metadata.js';
@@ -55,7 +56,11 @@ app.post('/authorize', formParser, authorizePostHandler);
 // Token Endpoint
 app.post('/token', corsMiddleware, formParser, tokenHandler);
 
-// MCP Endpoint — Bearer-Middleware VOR dem 405-Handler, damit jede Methode unauthentifiziert 401 liefert
+// MCP Endpoint — Bearer-Middleware VOR dem 405-Handler, damit jede Methode unauthentifiziert 401 liefert.
+// MCP läuft bewusst NUR auf /mcp (keine Root-Auslieferung): Auf einem Host, der auch eine
+// herkömmliche API bedient, muss der MCP-Endpunkt ein eigener Pfad bleiben. In Notion muss
+// der Connector daher mit der vollen URL inkl. /mcp eingetragen werden — Notion verwendet die
+// eingegebene URL als Endpunkt für den gesamten MCP-Traffic.
 const bearerAuth = requireBearerAuth({
   verifier: new JwtVerifier(),
   resourceMetadataUrl: config.PRM_URL,
@@ -66,6 +71,27 @@ app.all('/mcp', corsMiddleware, bearerAuth, (req: Request, res: Response, next: 
   } else {
     mcpMethodNotAllowedHandler(req, res);
   }
+});
+
+// Info-Seite auf / (HTML, wie im image-ai-portal-Pattern): zeigt Status, Endpunkte
+// und die korrekte Connector-URL (verhindert den Root-URL-Fehltritt in Notion).
+app.get('/', (_req, res) => {
+  const body = `
+    <h1>test-dcr-mcp-server</h1>
+    <div class="sub">Remote-MCP-Server mit OAuth 2.1 + Dynamic Client Registration (Test)</div>
+    <table>
+      <tr><td>MCP-Endpoint</td><td><span class="url">${escapeHtml(config.MCP_RESOURCE)}</span></td></tr>
+      <tr><td>PRM (RFC 9728)</td><td><a href="${escapeHtml(config.PRM_URL)}">${escapeHtml(config.PRM_URL)}</a></td></tr>
+      <tr><td>AS-Metadata (RFC 8414)</td><td><a href="${escapeHtml(config.BASE_URL)}/.well-known/oauth-authorization-server">${escapeHtml(config.BASE_URL)}/.well-known/oauth-authorization-server</a></td></tr>
+      <tr><td>DCR (RFC 7591)</td><td><span class="url">POST ${escapeHtml(config.BASE_URL)}/register</span></td></tr>
+      <tr><td>Health</td><td><a href="/health">/health</a></td></tr>
+    </table>
+    <div class="meta">
+      In Notion als Custom MCP Server die <b>MCP-Endpoint-URL inkl. /mcp</b> eintragen —
+      Notion verwendet die eingegebene URL als Endpunkt für den gesamten MCP-Traffic.
+      Tools: <code>whoami</code> · <code>echo</code> · <code>slow_task</code>
+    </div>`;
+  res.set('Cache-Control', 'no-store').status(200).send(widePage('Info', body));
 });
 
 // 5) 404 + zentraler Error-Handler
