@@ -228,6 +228,15 @@ Voraussetzung: Ein Owner/Admin hat **Custom MCP servers** freigeschaltet (`Setti
 - **Authn-Schicht** ([src/authn/](src/authn/)): Login-Methoden (lokal, Google, Entra) erzeugen eine `AuthnIdentity` und enden an der Nahtstelle `completeAuthorization` — austauschbar für spätere Projekte mit eigenem Login.
 - **Express 5**, weil `@modelcontextprotocol/sdk` selbst davon abhängt (keine Duplikat-Installation, `req.auth`-Augment greift).
 
+## Spec-Stand & Ausblick (MCP 2026-07-28)
+
+Dieser Server spricht die Wire-Revision **2025-06-18/2025-11-25** (via `@modelcontextprotocol/sdk` v1) — das ist das, was Notion heute versteht, und v1 erhält noch mindestens 6 Monate Fixes. Die Spec-Revision **2026-07-28** ist erschienen; Einordnung für dieses Projekt:
+
+- **Stateless ist jetzt Spec-Richtung** — dieser Server ist bereits so gebaut (`sessionIdGenerator: undefined`, neue Instanz pro Request). Die größten Breaking Changes (weg mit Sessions/Handshake/SSE-Resumability) betreffen uns nicht.
+- **RFC 9207 (`iss` in Authorization Responses) ist umgesetzt** — sowohl im Code-Redirect als auch in Fehler-Redirects.
+- **DCR (RFC 7591) ist deprecated** zugunsten *Client ID Metadata Documents* (CIMD). Bleibt aus Backwards-Kompatibilität verfügbar, und **Notion kann aktuell nur DCR** — dieser Server bleibt der funktionierende Pfad. Perspektivisch würde CIMD `/register` + Client-Store obsolet machen (weniger State, nicht mehr) — ein sinnvolles Folge-Feature, sobald Clients (Inspector/Notion) CIMD sprechen.
+- **SDK v2** (scoped Pakete: `@modelcontextprotocol/server`, offizielle Express/Fastify/Hono-Adapter, `createMcpHandler` für beide Revisionen an einem Endpoint, Codemod v1→v2): Migration erst nach Stable-Release; für Fastify-Portierungen (z. B. image-ai-portal) deckt der offizielle Adapter den bisherigen `reply.raw`-Handbetrieb ab.
+
 ## Erkenntnisse aus dem Notion-E2E-Test (gemessen, nicht geraten)
 
 Alles Folgende stammt aus den Request-Logs eines echten Connects mit Notion Custom Agents (Stand 2026-08):

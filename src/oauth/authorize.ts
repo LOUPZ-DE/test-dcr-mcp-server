@@ -23,6 +23,8 @@ function redirectWithError(res: Response, redirectUri: string, error: string, de
   url.searchParams.set('error', error);
   url.searchParams.set('error_description', description);
   if (state !== undefined) url.searchParams.set('state', state);
+  // RFC 9207: iss auch in Fehler-Responses (s. complete.ts)
+  url.searchParams.set('iss', config.BASE_URL);
   res.redirect(302, url.toString());
 }
 

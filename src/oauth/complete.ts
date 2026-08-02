@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { config } from '../config.js';
 import { randomToken } from './pkce.js';
 import { authCodes, type PendingAuth } from './store.js';
 import type { AuthnIdentity } from '../authn/identity.js';
@@ -32,6 +33,10 @@ export function completeAuthorization(res: Response, pending: PendingAuth, ident
   const url = new URL(pending.redirectUri);
   url.searchParams.set('code', code);
   if (pending.state !== undefined) url.searchParams.set('state', pending.state);
+  // RFC 9207 (SHOULD, MCP-Spec 2026-07-28): Issuer-Identifikation in der Authorization
+  // Response — Clients MÜSSEN ein vorhandenes iss gegen den erwarteten Issuer prüfen
+  // (Schutz gegen Authorization-Server-Mix-up).
+  url.searchParams.set('iss', config.BASE_URL);
   log('info', 'Authorize: Code ausgestellt', {
     clientId: pending.clientId,
     email: identity.email,
