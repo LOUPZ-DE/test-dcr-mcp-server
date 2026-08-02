@@ -41,6 +41,6 @@ export function renderLoginPage(res: Response, opts: LoginPageOpts): void {
     ${ssoButtons}
     ${localForm}
     ${opts.error ? `<div class="error">${escapeHtml(opts.error)}</div>` : ''}
-    <div class="meta">test-dcr-mcp-server · OAuth 2.1 Authorization Server (Test)</div>`;
+    <div class="meta">${escapeHtml(config.SERVER_NAME)} · OAuth 2.1 Authorization Server (Test)</div>`;
   res.set('Cache-Control', 'no-store').status(200).send(page('Anmelden', body));
 }

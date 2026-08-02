@@ -45,6 +45,7 @@ Server läuft auf `http://localhost:3000`.
 | `ACCESS_TOKEN_TTL` | `3600` | Sekunden. `60` = Refresh-Flow schnell testen |
 | `REFRESH_TOKEN_TTL` | `2592000` | Sekunden (30 Tage) |
 | `STATE_FILE` | _(aus)_ | Pfad zur State-Datei (DCR-Clients + Refresh-Tokens). Ohne Variable: rein in-memory |
+| `SERVER_NAME` | `test-dcr-mcp-server` | Anzeigename: `serverInfo.name`, `mcp.json`, PRM `resource_name`, HTML-Seiten |
 | `AUTH_PROVIDERS` | `local` | Komma-Liste: `local`, `google`, `entra` — kombinierbar, z. B. `local,google` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | – | Pflicht bei `google` |
 | `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | – | Pflicht bei `entra` |
@@ -247,6 +248,7 @@ Alles Folgende stammt aus den Request-Logs eines echten Connects mit Notion Cust
 - **Notions Redirect-URI:** `https://app.notion.com/workflows/mcp/oauth/callback`
 - User-Agent der serverseitigen Calls: `Notion-MCP-Client/1.0`.
 - Notion probiert zusätzlich `GET /.well-known/mcp.json` sowie `HEAD/GET /` — 404 ist ok, bricht nichts.
+- **`/.well-known/mcp.json` ist Notions Discovery-Konvention** (Name, `description`, **`icon`**, `endpoint`) und wird beim Verbinden abgerufen — dieser Server liefert das Dokument inkl. `icon` (selbst gehostet unter `/icon.png`, generiert via `scripts/generate-icon.mjs`). Zusätzlich trägt `serverInfo` ein `icons`-Array (MCP-Spec 2025-11-25, SEP-973) — damit lässt sich das Icon im Verbindungs-Dialog beeinflussen, ohne dass Notion-seitig etwas einstellbar wäre. Hinweis: Notion cached das Icon offenbar pro Verbindung — bei Änderungen Connector trennen und neu verbinden.
 
 ### Authorize-Request — Notion sendet Extra-Parameter
 

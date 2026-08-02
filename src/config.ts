@@ -23,6 +23,9 @@ const configSchema = z.object({
   REFRESH_TOKEN_TTL: z.coerce.number().int().min(60).default(2592000),
   STATE_FILE: z.string().min(1).optional(),
 
+  // Anzeigename des Servers (serverInfo.name, mcp.json, PRM resource_name, HTML-Seiten)
+  SERVER_NAME: z.string().min(1).default('test-dcr-mcp-server'),
+
   // ─── Authentication Provider ────────────────────────────────────────────
   // Komma-separierte Liste: local | google | entra (mehrere gleichzeitig möglich)
   AUTH_PROVIDERS: z.string().default('local').transform(csvList),

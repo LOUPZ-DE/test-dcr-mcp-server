@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules node_modules/
 COPY --from=build /app/dist dist/
+COPY assets/ assets/
 
 # Datenverzeichnis für das Statefile (STATE_FILE=/data/state.json).
 # Auf EasyPanel hier ein Volume mounten, damit DCR-Clients + Refresh-Tokens

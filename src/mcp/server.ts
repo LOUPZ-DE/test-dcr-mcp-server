@@ -2,10 +2,18 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { config } from '../config.js';
 import { log } from '../util/log.js';
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: 'test-dcr-mcp-server', version: '0.1.0' });
+  // serverInfo.icons (MCP-Spec 2025-11-25, SEP-973): visuelle Identität des Servers
+  // für Clients, die sie rendern (z. B. Verbindungs-Dialogs).
+  const server = new McpServer({
+    name: config.SERVER_NAME,
+    version: '0.1.0',
+    websiteUrl: config.BASE_URL,
+    icons: [{ src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] }],
+  });
 
   // 1. whoami — verifiziert Identity-Passthrough: liest die Identität aus dem Bearer-Token.
   // Bewusst OHNE inputSchema registriert: Das SDK zod-validiert sonst auch `undefined`

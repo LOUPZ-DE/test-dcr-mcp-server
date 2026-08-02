@@ -1,5 +1,6 @@
 /** Geteilte HTML-Helfer für die server-gerenderten Seiten (Login-Form, Info-Seite). */
 import type { Response } from 'express';
+import { config } from '../config.js';
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -11,7 +12,7 @@ export function page(title: string, body: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} · test-dcr-mcp-server</title>
+<title>${escapeHtml(title)} · ${escapeHtml(config.SERVER_NAME)}</title>
 <style>
   body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
   .card { background: #1e293b; border-radius: 12px; padding: 2rem; width: 100%; max-width: 380px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
@@ -48,6 +49,6 @@ export function widePage(title: string, body: string): string {
 /** Einheitliche Fehlerseite (Authorize-Flow, IdP-Callback, …). */
 export function renderErrorPage(res: Response, status: number, title: string, detail: string): void {
   const body = `<h1>${escapeHtml(title)}</h1><div class="error">${escapeHtml(detail)}</div>
-    <div class="meta">test-dcr-mcp-server · OAuth 2.1 Authorization Server (Test)</div>`;
+    <div class="meta">${escapeHtml(config.SERVER_NAME)} · OAuth 2.1 Authorization Server (Test)</div>`;
   res.set('Cache-Control', 'no-store').status(status).send(page(title, body));
 }

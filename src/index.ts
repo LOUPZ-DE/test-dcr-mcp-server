@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { readFileSync } from 'node:fs';
 import cors from 'cors';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { config } from './config.js';
@@ -37,6 +38,25 @@ const corsMiddleware = cors({
 // 4) Routen
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Server-Icon (wird von /.well-known/mcp.json und serverInfo.icons referenziert)
+const iconPng = readFileSync(new URL('../assets/icon.png', import.meta.url));
+app.get('/icon.png', (_req, res) => {
+  res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=86400').send(iconPng);
+});
+
+// Notion-Konvention: Discovery-Dokument für MCP-Clients (Name, Beschreibung, Icon).
+// Notion ruft diese Datei beim Verbinden tatsächlich ab (sichtbar im Request-Log).
+app.get('/.well-known/mcp.json', corsMiddleware, (_req, res) => {
+  res
+    .set('Cache-Control', 'public, max-age=300')
+    .json({
+      name: config.SERVER_NAME,
+      description: `${config.SERVER_NAME} — MCP-Server mit OAuth 2.1 + DCR (Referenz-Implementierung)`,
+      icon: `${config.BASE_URL}/icon.png`,
+      endpoint: config.MCP_RESOURCE,
+    });
 });
 
 // RFC 9728 PRM — Root-Variante (Notions Discovery) + pfad-spezifische Variante (RFC 9728 §3.1)
@@ -82,7 +102,7 @@ app.all('/mcp', corsMiddleware, bearerAuth, (req: Request, res: Response, next: 
 // und die korrekte Connector-URL (verhindert den Root-URL-Fehltritt in Notion).
 app.get('/', (_req, res) => {
   const body = `
-    <h1>test-dcr-mcp-server</h1>
+    <h1>${escapeHtml(config.SERVER_NAME)}</h1>
     <div class="sub">Remote-MCP-Server mit OAuth 2.1 + Dynamic Client Registration (Test)</div>
     <table>
       <tr><td>MCP-Endpoint</td><td><span class="url">${escapeHtml(config.MCP_RESOURCE)}</span></td></tr>
@@ -109,7 +129,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 app.listen(config.PORT, () => {
-  log('info', 'test-dcr-mcp-server läuft', {
+  log('info', `${config.SERVER_NAME} läuft`, {
     port: config.PORT,
     baseUrl: config.BASE_URL,
     mcpResource: config.MCP_RESOURCE,

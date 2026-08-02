@@ -16,7 +16,7 @@ export function prmHandler(_req: Request, res: Response): void {
       authorization_servers: [config.BASE_URL],
       bearer_methods_supported: ['header'],
       scopes_supported: SCOPES,
-      resource_name: 'test-dcr-mcp-server',
+      resource_name: config.SERVER_NAME,
     });
 }
 
