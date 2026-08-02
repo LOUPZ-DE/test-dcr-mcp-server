@@ -218,6 +218,14 @@ notion_user_id=<UUID des Notion-Nutzers>
 - Danach wird der Refresh-Grant bei kurzer `ACCESS_TOKEN_TTL` (60 s) erwartungsgemäß vor jedem weiteren MCP-Call genutzt.
 - PKCE ist S256, Code-Exchange sofort nach Redirect. Alles standardkonform.
 
+### Tool-Aufrufe
+
+- **`arguments` ist in der MCP-Spec optional — in der Praxis aber zweistufig Pflicht.** Beim ersten `whoami`-Aufruf ließ das Notion-LLM `arguments` weg → Notions Client lehnte **vor dem Absenden** ab: `payload.toolArguments should be defined, instead was 'undefined'` (Notion-interne Feldbezeichnung; der Call erreichte den Server nie). Retry mit `arguments: {}` → Erfolg.
+- **Auch serverseitig Vorsicht:** Das MCP-SDK lehnt fehlende `arguments` ab, wenn das Tool mit `inputSchema` registriert ist (`-32602: expected object, received undefined`) — selbst bei leerem Schema `{}`. **Fix: parameterlose Tools ganz ohne `inputSchema` registrieren** (Callback-Signatur ist dann `(extra) => …`); so akzeptiert der Server beide Varianten. `whoami` ist hier entsprechend gebaut.
+- Notion probiert nach dem Connect auch `GET /mcp` (SSE-Stream) → unser stateless Server antwortet `405` — Notion toleriert das und fällt auf POST zurück.
+- Nach `initialize` schickt Notion `notifications/initialized` → Antwort `202` (kein Body), normal.
+- Mit `ACCESS_TOKEN_TTL=60` refreshed Notion **vor nahezu jedem MCP-Call** den Token (im Log: `refresh_token`-Grant direkt vor jedem `POST /mcp`-Batch). Funktioniert, erzeugt aber Log-Rauschen — nach dem Refresh-Test ruhig TTL hochsetzen.
+
 ## Bekannte Grenzen (bewusst)
 
 - Klartext-Passwörter in der Env; Passwort-Vergleich ohne Hashing.

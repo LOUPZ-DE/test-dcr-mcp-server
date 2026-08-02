@@ -7,14 +7,16 @@ import { log } from '../util/log.js';
 function createMcpServer(): McpServer {
   const server = new McpServer({ name: 'test-dcr-mcp-server', version: '0.1.0' });
 
-  // 1. whoami — verifiziert Identity-Passthrough: liest die Identität aus dem Bearer-Token
+  // 1. whoami — verifiziert Identity-Passthrough: liest die Identität aus dem Bearer-Token.
+  // Bewusst OHNE inputSchema registriert: Das SDK zod-validiert sonst auch `undefined`
+  // (abgelehnt mit -32602), obwohl `arguments` in der MCP-Spec optional ist. Ohne Schema
+  // akzeptiert der Server den Call mit weggelassenem arguments UND mit {}.
   server.registerTool(
     'whoami',
     {
       description: 'Gibt den authentifizierten Nutzer des MCP-Servers zurück',
-      inputSchema: {},
     },
-    async (_args, extra) => {
+    async (extra) => {
       const authInfo = extra.authInfo;
       if (!authInfo) {
         return { content: [{ type: 'text', text: 'unauthenticated (kein AuthInfo im Request)' }] };
