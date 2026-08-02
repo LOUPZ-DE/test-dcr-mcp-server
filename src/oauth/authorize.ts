@@ -1,38 +1,14 @@
 import type { Request, Response } from 'express';
 import { config } from '../config.js';
 import { randomToken } from './pkce.js';
-import { getClient, getPendingAuth, pendingAuths, authCodes, users, type PendingAuth, type User } from './store.js';
-import { getSession, setSession } from './session.js';
+import { getClient, getPendingAuth, pendingAuths, users, type PendingAuth } from './store.js';
+import { completeAuthorization } from './complete.js';
+import { getSession, setSession } from '../authn/session.js';
+import { renderLoginPage } from '../authn/loginPage.js';
+import { renderErrorPage } from '../util/html.js';
 import { log } from '../util/log.js';
-import { escapeHtml, page } from '../util/html.js';
 
 const PENDING_TTL_MS = 10 * 60 * 1000;
-const CODE_TTL_MS = 10 * 60 * 1000;
-
-// ─── HTML ────────────────────────────────────────────────────────────────────
-
-function renderLoginForm(res: Response, txn: string, clientName: string | undefined, scope: string | undefined, error?: string): void {
-  const body = `
-    <h1>Anmelden</h1>
-    <div class="sub">${escapeHtml(clientName ?? 'Ein MCP-Client')} möchte Zugriff${scope ? ` · Scope: <code>${escapeHtml(scope)}</code>` : ''}</div>
-    <form method="post" action="/authorize" accept-charset="utf-8">
-      <input type="hidden" name="txn" value="${escapeHtml(txn)}">
-      <label for="email">E-Mail</label>
-      <input id="email" name="email" type="email" required autocomplete="username" autofocus>
-      <label for="password">Passwort</label>
-      <input id="password" name="password" type="password" required autocomplete="current-password">
-      <button type="submit">Anmelden &amp; autorisieren</button>
-    </form>
-    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
-    <div class="meta">test-dcr-mcp-server · OAuth 2.1 Authorization Server (Test)</div>`;
-  res.set('Cache-Control', 'no-store').status(200).send(page('Anmelden', body));
-}
-
-function renderError(res: Response, status: number, title: string, detail: string): void {
-  const body = `<h1>${escapeHtml(title)}</h1><div class="error">${escapeHtml(detail)}</div>
-    <div class="meta">test-dcr-mcp-server · OAuth 2.1 Authorization Server (Test)</div>`;
-  res.set('Cache-Control', 'no-store').status(status).send(page(title, body));
-}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -47,26 +23,6 @@ function redirectWithError(res: Response, redirectUri: string, error: string, de
   url.searchParams.set('error', error);
   url.searchParams.set('error_description', description);
   if (state !== undefined) url.searchParams.set('state', state);
-  res.redirect(302, url.toString());
-}
-
-function issueCodeAndRedirect(res: Response, pending: PendingAuth, user: User): void {
-  const code = randomToken(32);
-  authCodes.set(code, {
-    clientId: pending.clientId,
-    redirectUri: pending.redirectUri,
-    codeChallenge: pending.codeChallenge,
-    scope: pending.scope,
-    resource: pending.resource,
-    email: user.email,
-    name: user.name,
-    notionUserId: pending.notionUserId,
-    expiresAt: Date.now() + CODE_TTL_MS,
-  });
-  const url = new URL(pending.redirectUri);
-  url.searchParams.set('code', code);
-  if (pending.state !== undefined) url.searchParams.set('state', pending.state);
-  log('info', 'Authorize: Code ausgestellt', { clientId: pending.clientId, email: user.email, scope: pending.scope, resource: pending.resource, notionUserId: pending.notionUserId });
   res.redirect(302, url.toString());
 }
 
@@ -90,18 +46,18 @@ export function authorizeGetHandler(req: Request, res: Response): void {
 
   // 1) client_id prüfen — vor jedem Redirect, Fehler als HTML-Seite
   if (!clientId) {
-    renderError(res, 400, 'Ungültiger Authorization-Request', 'Parameter client_id fehlt.');
+    renderErrorPage(res, 400, 'Ungültiger Authorization-Request', 'Parameter client_id fehlt.');
     return;
   }
   const client = getClient(clientId);
   if (!client) {
-    renderError(res, 400, 'Ungültiger Authorization-Request', `Unbekannte client_id: ${clientId}`);
+    renderErrorPage(res, 400, 'Ungültiger Authorization-Request', `Unbekannte client_id: ${clientId}`);
     return;
   }
 
   // 2) redirect_uri: exakter String-Match gegen registrierte URIs (kein Prefix-Matching!)
   if (!redirectUri || !client.redirect_uris.includes(redirectUri)) {
-    renderError(res, 400, 'Ungültiger Authorization-Request', 'redirect_uri fehlt oder ist für diesen Client nicht registriert.');
+    renderErrorPage(res, 400, 'Ungültiger Authorization-Request', 'redirect_uri fehlt oder ist für diesen Client nicht registriert.');
     return;
   }
 
@@ -133,23 +89,25 @@ export function authorizeGetHandler(req: Request, res: Response): void {
   };
   pendingAuths.set(txn, pending);
 
-  // Bereits eingeloggt? → Formular überspringen
-  const sessionEmail = getSession(req);
-  if (sessionEmail) {
-    const user = users.get(sessionEmail.toLowerCase());
-    if (user) {
-      pendingAuths.delete(txn);
-      issueCodeAndRedirect(res, pending, user);
-      return;
-    }
+  // Bereits eingeloggt (lokale Session oder SSO-Session)? → Login überspringen
+  const session = getSession(req);
+  if (session) {
+    pendingAuths.delete(txn);
+    completeAuthorization(res, pending, session);
+    return;
   }
 
-  renderLoginForm(res, txn, client.client_name, scope);
+  renderLoginPage(res, { txn, clientName: client.client_name, scope });
 }
 
-// ─── POST /authorize ────────────────────────────────────────────────────────
+// ─── POST /authorize (lokaler Login; SSO läuft über /auth/:provider/*) ─────
 
 export function authorizePostHandler(req: Request, res: Response): void {
+  if (!config.localEnabled) {
+    renderErrorPage(res, 400, 'Lokaler Login deaktiviert', 'Dieser Server akzeptiert nur SSO-Logins (AUTH_PROVIDERS ohne local).');
+    return;
+  }
+
   const body = req.body as Record<string, unknown>;
   const txn = typeof body.txn === 'string' ? body.txn : undefined;
   const email = typeof body.email === 'string' ? body.email : '';
@@ -157,7 +115,7 @@ export function authorizePostHandler(req: Request, res: Response): void {
 
   const pending = txn ? getPendingAuth(txn) : undefined;
   if (!pending) {
-    renderError(res, 400, 'Anfrage abgelaufen', 'Die Autorisierungsanfrage ist unbekannt oder abgelaufen — bitte den Sign-in erneut starten.');
+    renderErrorPage(res, 400, 'Anfrage abgelaufen', 'Die Autorisierungsanfrage ist unbekannt oder abgelaufen — bitte den Sign-in erneut starten.');
     return;
   }
   const client = getClient(pending.clientId);
@@ -165,11 +123,12 @@ export function authorizePostHandler(req: Request, res: Response): void {
   const user = users.get(email.toLowerCase());
   if (!user || user.password !== password) {
     log('info', 'Authorize: Login fehlgeschlagen', { email });
-    renderLoginForm(res, txn!, client?.client_name, pending.scope, 'E-Mail oder Passwort falsch.');
+    renderLoginPage(res, { txn: txn!, clientName: client?.client_name, scope: pending.scope, error: 'E-Mail oder Passwort falsch.' });
     return;
   }
 
   pendingAuths.delete(txn!);
-  setSession(res, user.email);
-  issueCodeAndRedirect(res, pending, user);
+  const identity = { email: user.email, name: user.name, idp: 'local' };
+  setSession(res, identity);
+  completeAuthorization(res, pending, identity);
 }

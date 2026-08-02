@@ -15,3 +15,8 @@ export function verifyS256(verifier: string, challenge: string): boolean {
   const b = Buffer.from(challenge);
   return a.length === b.length && timingSafeEqual(a, b);
 }
+
+/** S256-Challenge zu einem Verifier berechnen (für ausgehende PKCE-Flows, z. B. zum IdP). */
+export function s256Challenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}

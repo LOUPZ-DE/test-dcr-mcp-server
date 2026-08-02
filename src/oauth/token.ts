@@ -24,7 +24,7 @@ function tokenError(res: Response, error: string, description: string): void {
 }
 
 async function issueTokenPair(res: Response, params: {
-  clientId: string; email: string; name: string; scope?: string; resource?: string; notionUserId?: string;
+  clientId: string; email: string; name: string; scope?: string; resource?: string; notionUserId?: string; idp?: string;
 }): Promise<void> {
   const accessToken = await signAccessToken({
     email: params.email,
@@ -33,6 +33,7 @@ async function issueTokenPair(res: Response, params: {
     scope: params.scope,
     resource: params.resource,
     notionUserId: params.notionUserId,
+    idp: params.idp,
   });
   const refreshToken = randomToken(32);
   refreshTokens.set(refreshToken, {
@@ -42,6 +43,7 @@ async function issueTokenPair(res: Response, params: {
     scope: params.scope,
     resource: params.resource,
     notionUserId: params.notionUserId,
+    idp: params.idp,
     expiresAt: Date.now() + config.REFRESH_TOKEN_TTL * 1000,
   });
   scheduleSave();
@@ -112,6 +114,7 @@ export async function tokenHandler(req: Request, res: Response): Promise<void> {
       scope: stored.scope,
       resource: stored.resource,
       notionUserId: stored.notionUserId,
+      idp: stored.idp,
     });
     return;
   }
@@ -137,6 +140,7 @@ export async function tokenHandler(req: Request, res: Response): Promise<void> {
       scope: stored.scope,
       resource: stored.resource,
       notionUserId: stored.notionUserId,
+      idp: stored.idp,
     });
     return;
   }

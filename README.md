@@ -15,6 +15,7 @@ Minimaler, spec-konformer **Remote-MCP-Server** mit eigenem **OAuth-2.1-Authoriz
   - Authorization-Code-Grant + Refresh-Token-Grant mit **Rotation**
   - RFC 8707 `resource`-Parameter wird akzeptiert und geloggt
 - **Login-Formular mit E-Mail + Passwort** am `/authorize`-Endpoint (User via `USERS_JSON` provisioniert)
+- **SSO: externe Identity Provider** per Env zuschaltbar — **Google** und **Microsoft Entra (Single-Tenant)** via OIDC (Authorization Code + PKCE, JWKS-Verifizierung des `id_token`), optional mit Domain-/E-Mail-Allowlist
 - Access Tokens = JWT (HS256, self-contained); Refresh Tokens = opak mit Rotation
 - **401 + `WWW-Authenticate: Bearer … resource_metadata=…`** auf unauthentifizierte `/mcp`-Requests (Notions Discovery-Trigger)
 - **Request-Logging auf allen Auth-Endpunkten** (JSON-Zeilen, Secrets redigiert) — zeigt, was Notion tatsächlich sendet
@@ -40,10 +41,55 @@ Server läuft auf `http://localhost:3000`.
 | `PORT` | `3000` | Listen-Port |
 | `TOKEN_SECRET` | – | JWT-Signatur (HS256), min. 32 Zeichen |
 | `SESSION_SECRET` | – | HMAC-Signatur des Login-Cookies, min. 32 Zeichen |
-| `USERS_JSON` | – | Test-Nutzer, z. B. `[{"email":"a@b.c","password":"pw","name":"Ada"}]` (Klartext — Testserver!) |
+| `USERS_JSON` | – | Test-Nutzer, z. B. `[{"email":"a@b.c","password":"pw","name":"Ada"}]` (Klartext — Testserver!). Nur Pflicht bei `AUTH_PROVIDERS` mit `local` |
 | `ACCESS_TOKEN_TTL` | `3600` | Sekunden. `60` = Refresh-Flow schnell testen |
 | `REFRESH_TOKEN_TTL` | `2592000` | Sekunden (30 Tage) |
 | `STATE_FILE` | _(aus)_ | Pfad zur State-Datei (DCR-Clients + Refresh-Tokens). Ohne Variable: rein in-memory |
+| `AUTH_PROVIDERS` | `local` | Komma-Liste: `local`, `google`, `entra` — kombinierbar, z. B. `local,google` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | – | Pflicht bei `google` |
+| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | – | Pflicht bei `entra` |
+| `SSO_ALLOWED_DOMAINS` | _(aus)_ | Komma-Liste erlaubter E-Mail-Domains für SSO |
+| `SSO_ALLOWED_EMAILS` | _(aus)_ | Komma-Liste erlaubter Einzel-Adressen für SSO |
+
+## SSO: externe Identity Provider (Google / Microsoft Entra)
+
+Der Server bleibt gegenüber Notion der OAuth-Issuer (DCR, eigene JWTs — unverändert). Nur der **Login-Schritt** wird an den IdP delegiert (Federated-Broker-Muster):
+
+```
+Notion ──OAuth──> dieser Server ──OIDC──> Google / Entra
+        (unverändert)              (nur Authentifizierung,
+                                     kein Upstream-Token nötig)
+```
+
+Flow: Login-Seite zeigt Buttons → `GET /auth/<provider>/start?txn=…` → Redirect zum IdP (Authorization Code + **PKCE S256** + `nonce`) → `GET /auth/<provider>/callback` → Code-Tausch → **`id_token` per JWKS verifiziert** (`iss`, `aud`, `nonce`) → Allowlist-Prüfung → danach exakt derselbe Pfad wie der lokale Login (Session-Cookie, eigener Code, eigene Tokens). `whoami` zeigt den IdP (`idp: "google" | "entra" | "local"`).
+
+> ⚠️ Ohne `SSO_ALLOWED_DOMAINS`/`SSO_ALLOWED_EMAILS` kann sich **jeder** Account des IdP einloggen (Boot-Warnung). Bei Entra-Single-Tenant begrenzt der Tenant bereits die Org — die Allowlist ist dann optional.
+
+### Google einrichten
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → Projekt wählen/erstellen → **APIs & Services → OAuth consent screen** (External, Basis-Infos).
+2. **Credentials → Create Credentials → OAuth client ID** → Typ **Web application**.
+3. **Authorized redirect URI** eintragen: `https://<host>/auth/google/callback`
+4. Client ID + Secret in die Env: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_PROVIDERS=local,google` (oder ohne `local`).
+
+### Microsoft Entra einrichten (Single-Tenant, empfohlen)
+
+1. [Entra Portal](https://entra.microsoft.com/) → **Identity → Applications → App registrations → New registration**.
+2. Name frei, **Supported account types: „Accounts in this organizational directory only (Single tenant)"** — dadurch können sich nur Mitglieder eures Tenants einloggen.
+3. **Redirect URI**: Plattform **Web**, `https://<host>/auth/entra/callback`.
+4. **Certificates & secrets → New client secret** → Wert sofort kopieren.
+5. In die Env: `ENTRA_TENANT_ID` (Directory/Tenant ID von der Übersichtsseite der App), `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `AUTH_PROVIDERS=local,entra`.
+6. Keine zusätzlichen API-Permissions nötig (`openid email profile` reicht; Standard-Consent).
+7. Hinweis: Der `email`-Claim ist bei Entra **nicht garantiert** — der Server fällt auf `preferred_username`/`upn` zurück.
+
+## Eigene Login-Implementierung anschließen (Austausch-Nahtstelle)
+
+Die Login-Methoden sind bewusst austauschbar gebaut — für spätere Projekte mit bestehendem Login (z. B. App-Session, anderes SSO):
+
+1. Erzeuge eine `AuthnIdentity` (`{email, name, idp}`, [src/authn/identity.ts](src/authn/identity.ts)) aus deiner eigenen Authentifizierung.
+2. Rufe **`completeAuthorization(res, pending, identity)`** ([src/oauth/complete.ts](src/oauth/complete.ts)) — das ist die einzige Nahtstelle. Alles dahinter (Code, Tokens, JWT, MCP) bleibt unverändert.
+
+Die bestehenden Methoden leben in [src/authn/](src/authn/) (lokales Formular in `loginPage.ts` + `POST /authorize` in [src/oauth/authorize.ts](src/oauth/authorize.ts), SSO in [src/authn/idp/](src/authn/idp/)) und können komplett ersetzt werden. Neuer IdP gefällig? `IdpProvider`-Objekt ([src/authn/idp/types.ts](src/authn/idp/types.ts)) + Registry-Eintrag genügt.
 
 ## Verifikation per curl
 
@@ -178,7 +224,8 @@ Voraussetzung: Ein Owner/Admin hat **Custom MCP servers** freigeschaltet (`Setti
 
 - **Stateless MCP-Transport**: pro `POST /mcp` frische `McpServer`+`StreamableHTTPServerTransport`-Instanz (`sessionIdGenerator: undefined`). `GET /mcp` → 405 (kein Standalone-SSE ohne Sessions).
 - **Was wird wo gespeichert?** Access Tokens (JWT) nirgends — nur signiert/verifiziert. Refresh Tokens, DCR-Clients, Auth-Codes, Pending-Logins in Maps; davon werden Clients + Refresh-Tokens ins `STATE_FILE` persistiert (debounced, atomar via tmp+rename). Auth-Codes/Pending (10-min-TTL) bleiben bewusst flüchtig. Nutzer kommen immer aus `USERS_JSON`.
-- **Login-Session**: HMAC-signiertes Cookie (`HttpOnly; SameSite=Lax`; `Secure` nur bei HTTPS), damit nachfolgende Authorize-Requests das Formular überspringen.
+- **Login-Session**: HMAC-signiertes Cookie (`HttpOnly; SameSite=Lax`; `Secure` nur bei HTTPS) mit JSON-Payload `{email, name, idp}` — funktioniert für lokale User und SSO-Identitäten gleichermaßen; nachfolgende Authorize-Requests überspringen den Login.
+- **Authn-Schicht** ([src/authn/](src/authn/)): Login-Methoden (lokal, Google, Entra) erzeugen eine `AuthnIdentity` und enden an der Nahtstelle `completeAuthorization` — austauschbar für spätere Projekte mit eigenem Login.
 - **Express 5**, weil `@modelcontextprotocol/sdk` selbst davon abhängt (keine Duplikat-Installation, `req.auth`-Augment greift).
 
 ## Erkenntnisse aus dem Notion-E2E-Test (gemessen, nicht geraten)
@@ -232,3 +279,5 @@ notion_user_id=<UUID des Notion-Nutzers>
 - Kein Rate-Limiting, keine CSRF-Tokens am Login-Form (Txn-Id ist zufällig, reicht für den Test).
 - `resource`-Mismatch wird nur geloggt, nicht abgelehnt (Lernmodus).
 - Ohne `STATE_FILE` überleben Registrierungen/Refresh-Tokens keinen Restart → Notion registriert sich dann neu und der Nutzer loggt sich neu ein.
+- SSO: `email_verified` wird nur bei Google geprüft (bei Entra vertrauen wir dem Tenant); ohne Allowlist ist der Login für alle Accounts des IdP offen.
+- Der SSO-Flow ist ohne echte IdP-App-Registrierung nicht End-zu-End-getestet (strukturell getestet: Start-Redirects inkl. PKCE-Parametern, Fehlerpfade, Provider-Abschaltung).

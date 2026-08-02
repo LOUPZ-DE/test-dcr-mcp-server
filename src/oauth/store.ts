@@ -24,6 +24,8 @@ export interface AuthCode {
   resource?: string;
   email: string;
   name: string;
+  /** Woher die Identität stammt: 'local' | 'google' | 'entra' */
+  idp?: string;
   /** Notion sendet beim Authorize-Request eine notion_user_id — durchgereicht bis in den JWT. */
   notionUserId?: string;
   expiresAt: number; // unix ms
@@ -35,6 +37,7 @@ export interface RefreshToken {
   name: string;
   scope?: string;
   resource?: string;
+  idp?: string;
   notionUserId?: string;
   expiresAt: number; // unix ms
 }
@@ -47,6 +50,16 @@ export interface PendingAuth {
   scope?: string;
   resource?: string;
   notionUserId?: string;
+  expiresAt: number; // unix ms
+}
+
+/** Kurzlebige Transaktion für den IdP-Flow (SSO) — key = state, der zum IdP gesendet wird. */
+export interface IdpTxn {
+  /** Referenz auf den Key in pendingAuths (unser Flow Richtung Notion) */
+  txn: string;
+  providerKey: string;
+  nonce: string;
+  codeVerifier: string;
   expiresAt: number; // unix ms
 }
 
@@ -67,9 +80,11 @@ export const refreshTokens = new Map<string, RefreshToken>();
 export const authCodes = new Map<string, AuthCode>();
 /** Kurzlebig (10 min) — bleibt bewusst flüchtig. */
 export const pendingAuths = new Map<string, PendingAuth>();
+/** Kurzlebig (10 min) — SSO-Transaktionen, key = state zum IdP. */
+export const idpTxns = new Map<string, IdpTxn>();
 
-/** Nutzer aus USERS_JSON (Env ist Source of Truth). */
-export const users = new Map<string, User>(config.USERS_JSON.map((u) => [u.email.toLowerCase(), u]));
+/** Nutzer aus USERS_JSON (Env ist Source of Truth) — nur für den 'local'-Provider. */
+export const users = new Map<string, User>(config.USERS.map((u) => [u.email.toLowerCase(), u]));
 
 // ─── Lazy Expiry + Sweep ─────────────────────────────────────────────────────
 
@@ -88,12 +103,14 @@ export const getClient = (id: string) => clients.get(id);
 export const getAuthCode = (code: string) => getLive(authCodes, code);
 export const getRefreshToken = (token: string) => getLive(refreshTokens, token, scheduleSave);
 export const getPendingAuth = (txn: string) => getLive(pendingAuths, txn);
+export const getIdpTxn = (state: string) => getLive(idpTxns, state);
 
 const sweep = setInterval(() => {
   const now = Date.now();
   let removedRefresh = 0;
   for (const [k, v] of authCodes) if (v.expiresAt <= now) authCodes.delete(k);
   for (const [k, v] of pendingAuths) if (v.expiresAt <= now) pendingAuths.delete(k);
+  for (const [k, v] of idpTxns) if (v.expiresAt <= now) idpTxns.delete(k);
   for (const [k, v] of refreshTokens) if (v.expiresAt <= now) { refreshTokens.delete(k); removedRefresh++; }
   if (removedRefresh > 0) scheduleSave();
 }, 5 * 60 * 1000);

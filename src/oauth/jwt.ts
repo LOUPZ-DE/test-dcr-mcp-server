@@ -15,6 +15,8 @@ export interface AccessTokenClaims {
   resource?: string;
   /** Notion schickt beim Authorize-Request eine notion_user_id mit — landet als Custom Claim im JWT. */
   notionUserId?: string;
+  /** Herkunft der Identität: 'local' | 'google' | 'entra' */
+  idp?: string;
 }
 
 /** Access Token = JWT (HS256) — self-contained, wird serverseitig nicht gespeichert. */
@@ -26,6 +28,7 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
     client_id: claims.clientId,
     scope: claims.scope ?? 'mcp',
     ...(claims.notionUserId ? { notion_user_id: claims.notionUserId } : {}),
+    ...(claims.idp ? { idp: claims.idp } : {}),
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt(now)
@@ -67,6 +70,7 @@ export class JwtVerifier implements OAuthTokenVerifier {
         email: (payload.email as string) ?? payload.sub,
         name: payload.name as string | undefined,
         notionUserId: payload.notion_user_id as string | undefined,
+        idp: payload.idp as string | undefined,
       },
     };
   }

@@ -10,6 +10,7 @@ import { prmHandler, asMetadataHandler } from './oauth/metadata.js';
 import { registerHandler } from './oauth/register.js';
 import { authorizeGetHandler, authorizePostHandler } from './oauth/authorize.js';
 import { tokenHandler } from './oauth/token.js';
+import { idpStartHandler, idpCallbackHandler } from './authn/idp/routes.js';
 import { mcpPostHandler, mcpMethodNotAllowedHandler } from './mcp/server.js';
 
 loadState();
@@ -49,9 +50,13 @@ app.get('/.well-known/openid-configuration', corsMiddleware, asMetadataHandler);
 // RFC 7591 DCR
 app.post('/register', corsMiddleware, registerHandler);
 
-// Authorization Endpoint (Browser-Flow mit Login-Formular — kein CORS nötig, same-origin Form)
+// Authorization Endpoint (Browser-Flow — Login-Rendering in src/authn/, austauschbar)
 app.get('/authorize', authorizeGetHandler);
 app.post('/authorize', formParser, authorizePostHandler);
+
+// SSO: OIDC-Flow zu externen Identity Providern (aktive Provider siehe AUTH_PROVIDERS)
+app.get('/auth/:provider/start', idpStartHandler);
+app.get('/auth/:provider/callback', idpCallbackHandler);
 
 // Token Endpoint
 app.post('/token', corsMiddleware, formParser, tokenHandler);
@@ -109,7 +114,8 @@ app.listen(config.PORT, () => {
     baseUrl: config.BASE_URL,
     mcpResource: config.MCP_RESOURCE,
     accessTokenTtl: config.ACCESS_TOKEN_TTL,
-    users: config.USERS_JSON.length,
+    authProviders: config.AUTH_PROVIDERS,
+    users: config.USERS.length,
     stateFile: config.STATE_FILE ?? '(in-memory)',
   });
 });
