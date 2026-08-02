@@ -1,0 +1,30 @@
+{
+  "name": "test-dcr-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Test-MCP-Server mit OAuth 2.1 + Dynamic Client Registration für Notion Custom Agents",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "jose": "^6.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.7.3"
+  }
+}
