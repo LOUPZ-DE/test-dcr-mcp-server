@@ -1,9 +1,9 @@
 {
   "name": "test-dcr-mcp-server",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
-  "description": "Test-MCP-Server mit OAuth 2.1 + Dynamic Client Registration für Notion Custom Agents",
+  "description": "Reference MCP server with OAuth 2.1 + Dynamic Client Registration for Notion Custom Agents",
   "engines": {
     "node": ">=22"
   },
@@ -11,7 +11,8 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:flow": "./scripts/test-flow.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -26,5 +27,19 @@
     "@types/node": "^22.10.0",
     "tsx": "^4.20.3",
     "typescript": "^5.7.3"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LOUPZ-DE/test-dcr-mcp-server.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "oauth2",
+    "dcr",
+    "notion",
+    "sso",
+    "oidc"
+  ]
 }

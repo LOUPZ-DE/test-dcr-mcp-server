@@ -1,100 +1,120 @@
-# test-dcr-mcp-server
+# Test-DCR-MCP-Server
 
-Minimaler, spec-konformer **Remote-MCP-Server** mit eigenem **OAuth-2.1-Authorization-Server** inkl. **Dynamic Client Registration (DCR)** — gebaut, um Notion Custom Agents per „Sign in with OAuth" anzubinden, ohne dass ein Bearer-Token manuell eingetragen wird.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js ≥ 22](https://img.shields.io/badge/node-%E2%89%A5%2022-brightgreen)](package.json)
+[![MCP SDK 1.30](https://img.shields.io/badge/MCP%20SDK-1.30-blueviolet)](https://github.com/modelcontextprotocol/typescript-sdk)
+[![OAuth 2.1 + DCR](https://img.shields.io/badge/OAuth%202.1-%2B%20DCR%20(RFC%207591)-orange)](https://datatracker.ietf.org/doc/html/rfc7591)
+[![Docker ready](https://img.shields.io/badge/docker-ready-2496ED)](Dockerfile)
 
-**Testserver, kein Produktionscode.** In-Memory-State, Klartext-Passwörter in der Env, keine Nutzerverwaltung.
+> 🇩🇪 **[Deutsche Version: README.de.md](README.de.md)**
+
+A minimal, spec-compliant **remote MCP server** with a built-in **OAuth 2.1 authorization server** including **Dynamic Client Registration (DCR)** — built so that Notion Custom Agents can connect via "Sign in with OAuth", without ever pasting a bearer token.
+
+**Reference implementation / test server — not production-hardened.** In-memory state, plaintext env passwords, no user management. See [Known limits](#known-limits-deliberate).
+
+## Why this exists
+
+Notion Custom Agents accept custom MCP servers over OAuth **only if the server supports DCR** — otherwise Notion would have to pre-register a client, which it only does for official connectors. This repo is a working, verified reference for that path, including **measured findings from a real Notion E2E test** (see below) and optional **SSO federation to Google / Microsoft Entra** — the pattern you need for "connect Notion to your corporate IdP".
 
 ## Features
 
-- **MCP Streamable HTTP** unter `POST /mcp` (stateless, kein Session-Store)
-- **OAuth 2.1 Authorization Server** handimplementiert (für maximale Transparenz im Log):
-  - RFC 9728 Protected Resource Metadata (`/.well-known/oauth-protected-resource`, auch `/mcp`-Variante)
-  - RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server` + `/openid-configuration`-Alias)
+- **MCP Streamable HTTP** at `POST /mcp` (stateless, no session store)
+- **Hand-rolled OAuth 2.1 authorization server** (for maximum log transparency):
+  - RFC 9728 Protected Resource Metadata (`/.well-known/oauth-protected-resource`, plus the `/mcp` path variant)
+  - RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server` + `/openid-configuration` alias)
   - RFC 7591 Dynamic Client Registration (`POST /register`, public clients)
-  - PKCE zwingend mit `S256` (RFC 7636)
-  - Authorization-Code-Grant + Refresh-Token-Grant mit **Rotation**
-  - RFC 8707 `resource`-Parameter wird akzeptiert und geloggt
-- **Login-Formular mit E-Mail + Passwort** am `/authorize`-Endpoint (User via `USERS_JSON` provisioniert)
-- **SSO: externe Identity Provider** per Env zuschaltbar — **Google** und **Microsoft Entra (Single-Tenant)** via OIDC (Authorization Code + PKCE, JWKS-Verifizierung des `id_token`), optional mit Domain-/E-Mail-Allowlist
-- Access Tokens = JWT (HS256, self-contained); Refresh Tokens = opak mit Rotation
-- **401 + `WWW-Authenticate: Bearer … resource_metadata=…`** auf unauthentifizierte `/mcp`-Requests (Notions Discovery-Trigger)
-- **Request-Logging auf allen Auth-Endpunkten** (JSON-Zeilen, Secrets redigiert) — zeigt, was Notion tatsächlich sendet
-- **Statefile-Persistenz** (optional): DCR-Clients + Refresh-Tokens überleben Restarts (`STATE_FILE` + Volume)
-- Tools: `whoami` (Identity-Passthrough), `echo`, `slow_task` (Timeout-Verhalten)
+  - PKCE enforced with `S256` (RFC 7636)
+  - Authorization code grant + refresh token grant with **rotation**
+  - RFC 8707 `resource` parameter accepted and logged
+  - RFC 9207 `iss` parameter in authorization responses
+- **Login form with email + password** at `/authorize` (users provisioned via `USERS_JSON`)
+- **SSO: external identity providers** switchable via env — **Google** and **Microsoft Entra (single tenant)** over OIDC (authorization code + PKCE, `id_token` verified via JWKS), optional domain/email allowlist
+- Access tokens = JWT (HS256, self-contained); refresh tokens = opaque with rotation
+- **401 + `WWW-Authenticate: Bearer … resource_metadata=…`** on unauthenticated `/mcp` requests (Notion's discovery trigger)
+- **Request logging on all auth endpoints** (JSON lines, secrets redacted) — shows exactly what Notion sends
+- **State file persistence** (optional): DCR clients + refresh tokens survive restarts (`STATE_FILE` + volume)
+- **Server icon**: `/.well-known/mcp.json` (Notion's discovery convention) + `serverInfo.icons` (SEP-973)
+- Tools: `whoami` (identity passthrough), `echo`, `slow_task` (timeout behavior)
 
-## Quickstart (lokal)
+## Quickstart (local)
 
 ```bash
 cp .env.example .env
-# Secrets in .env anpassen (min. 32 Zeichen), z. B.: openssl rand -base64 48
+# adjust secrets in .env (min. 32 chars each), e.g.: openssl rand -base64 48
 npm install
 npm run dev
 ```
 
-Server läuft auf `http://localhost:3000`.
+Server runs at `http://localhost:3000`.
 
-## Konfiguration (Env)
+## Configuration (env)
 
-| Variable | Default | Beschreibung |
+| Variable | Default | Description |
 |---|---|---|
-| `BASE_URL` | – | Öffentliche URL ohne trailing slash. **Muss exakt stimmen** (Issuer-Match). Lokal `http://localhost:3000`, produktiv `https://…` |
-| `PORT` | `3000` | Listen-Port |
-| `TOKEN_SECRET` | – | JWT-Signatur (HS256), min. 32 Zeichen |
-| `SESSION_SECRET` | – | HMAC-Signatur des Login-Cookies, min. 32 Zeichen |
-| `USERS_JSON` | – | Test-Nutzer, z. B. `[{"email":"a@b.c","password":"pw","name":"Ada"}]` (Klartext — Testserver!). Nur Pflicht bei `AUTH_PROVIDERS` mit `local` |
-| `ACCESS_TOKEN_TTL` | `3600` | Sekunden. `60` = Refresh-Flow schnell testen |
-| `REFRESH_TOKEN_TTL` | `2592000` | Sekunden (30 Tage) |
-| `STATE_FILE` | _(aus)_ | Pfad zur State-Datei (DCR-Clients + Refresh-Tokens). Ohne Variable: rein in-memory |
-| `SERVER_NAME` | `test-dcr-mcp-server` | Anzeigename: `serverInfo.name`, `mcp.json`, PRM `resource_name`, HTML-Seiten |
-| `AUTH_PROVIDERS` | `local` | Komma-Liste: `local`, `google`, `entra` — kombinierbar, z. B. `local,google` |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | – | Pflicht bei `google` |
-| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | – | Pflicht bei `entra` |
-| `SSO_ALLOWED_DOMAINS` | _(aus)_ | Komma-Liste erlaubter E-Mail-Domains für SSO |
-| `SSO_ALLOWED_EMAILS` | _(aus)_ | Komma-Liste erlaubter Einzel-Adressen für SSO |
+| `BASE_URL` | – | Public URL without trailing slash. **Must match exactly** (issuer match). Locally `http://localhost:3000`, in production `https://…` |
+| `PORT` | `3000` | Listen port |
+| `TOKEN_SECRET` | – | JWT signature (HS256), min. 32 chars |
+| `SESSION_SECRET` | – | HMAC signature of the login cookie, min. 32 chars |
+| `USERS_JSON` | – | Test users, e.g. `[{"email":"a@b.c","password":"pw","name":"Ada"}]` (plaintext — test server!). Only required when `AUTH_PROVIDERS` includes `local` |
+| `ACCESS_TOKEN_TTL` | `3600` | Seconds. `60` = test the refresh flow quickly |
+| `REFRESH_TOKEN_TTL` | `2592000` | Seconds (30 days) |
+| `STATE_FILE` | _(off)_ | Path to state file (DCR clients + refresh tokens). Without it: pure in-memory |
+| `SERVER_NAME` | `test-dcr-mcp-server` | Display name: `serverInfo.name`, `mcp.json`, PRM `resource_name`, HTML pages |
+| `AUTH_PROVIDERS` | `local` | Comma list: `local`, `google`, `entra` — combinable, e.g. `local,google` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | – | Required for `google` |
+| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | – | Required for `entra` |
+| `SSO_ALLOWED_DOMAINS` | _(off)_ | Comma list of allowed email domains for SSO |
+| `SSO_ALLOWED_EMAILS` | _(off)_ | Comma list of allowed individual addresses for SSO |
 
-## SSO: externe Identity Provider (Google / Microsoft Entra)
+## SSO: external identity providers (Google / Microsoft Entra)
 
-Der Server bleibt gegenüber Notion der OAuth-Issuer (DCR, eigene JWTs — unverändert). Nur der **Login-Schritt** wird an den IdP delegiert (Federated-Broker-Muster):
+The server remains the OAuth issuer toward Notion (DCR, its own JWTs — unchanged). Only the **login step** is delegated to the IdP (federated broker pattern):
 
 ```
-Notion ──OAuth──> dieser Server ──OIDC──> Google / Entra
-        (unverändert)              (nur Authentifizierung,
-                                     kein Upstream-Token nötig)
+Notion ──OAuth──> this server ──OIDC──> Google / Entra
+        (unchanged)            (authentication only,
+                                no upstream token needed)
 ```
 
-Flow: Login-Seite zeigt Buttons → `GET /auth/<provider>/start?txn=…` → Redirect zum IdP (Authorization Code + **PKCE S256** + `nonce`) → `GET /auth/<provider>/callback` → Code-Tausch → **`id_token` per JWKS verifiziert** (`iss`, `aud`, `nonce`) → Allowlist-Prüfung → danach exakt derselbe Pfad wie der lokale Login (Session-Cookie, eigener Code, eigene Tokens). `whoami` zeigt den IdP (`idp: "google" | "entra" | "local"`).
+Flow: login page shows buttons → `GET /auth/<provider>/start?txn=…` → redirect to IdP (authorization code + **PKCE S256** + `nonce`) → `GET /auth/<provider>/callback` → code exchange → **`id_token` verified via JWKS** (`iss`, `aud`, `nonce`) → allowlist check → then exactly the same path as the local login (session cookie, own code, own tokens). `whoami` shows the IdP (`idp: "google" | "entra" | "local"`).
 
-> ⚠️ Ohne `SSO_ALLOWED_DOMAINS`/`SSO_ALLOWED_EMAILS` kann sich **jeder** Account des IdP einloggen (Boot-Warnung). Bei Entra-Single-Tenant begrenzt der Tenant bereits die Org — die Allowlist ist dann optional.
+> ⚠️ Without `SSO_ALLOWED_DOMAINS`/`SSO_ALLOWED_EMAILS`, **any** account of the IdP can log in (boot warning). With Entra single tenant, the tenant already scopes the org — the allowlist is optional there.
 
-### Google einrichten
+### Setting up Google
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → Projekt wählen/erstellen → **APIs & Services → OAuth consent screen** (External, Basis-Infos).
-2. **Credentials → Create Credentials → OAuth client ID** → Typ **Web application**.
-3. **Authorized redirect URI** eintragen: `https://<host>/auth/google/callback`
-4. Client ID + Secret in die Env: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_PROVIDERS=local,google` (oder ohne `local`).
+1. [Google Cloud Console](https://console.cloud.google.com/) → pick/create project → **APIs & Services → OAuth consent screen** (External, basic info).
+2. **Credentials → Create Credentials → OAuth client ID** → type **Web application**.
+3. **Authorized redirect URI**: `https://<host>/auth/google/callback`
+4. Env: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_PROVIDERS=local,google` (or without `local`).
 
-### Microsoft Entra einrichten (Single-Tenant, empfohlen)
+### Setting up Microsoft Entra (single tenant, recommended)
 
 1. [Entra Portal](https://entra.microsoft.com/) → **Identity → Applications → App registrations → New registration**.
-2. Name frei, **Supported account types: „Accounts in this organizational directory only (Single tenant)"** — dadurch können sich nur Mitglieder eures Tenants einloggen.
-3. **Redirect URI**: Plattform **Web**, `https://<host>/auth/entra/callback`.
-4. **Certificates & secrets → New client secret** → Wert sofort kopieren.
-5. In die Env: `ENTRA_TENANT_ID` (Directory/Tenant ID von der Übersichtsseite der App), `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `AUTH_PROVIDERS=local,entra`.
-6. Keine zusätzlichen API-Permissions nötig (`openid email profile` reicht; Standard-Consent).
-7. Hinweis: Der `email`-Claim ist bei Entra **nicht garantiert** — der Server fällt auf `preferred_username`/`upn` zurück.
+2. Any name, **Supported account types: "Accounts in this organizational directory only (Single tenant)"** — only members of your tenant can log in.
+3. **Redirect URI**: platform **Web**, `https://<host>/auth/entra/callback`.
+4. **Certificates & secrets → New client secret** → copy the value immediately.
+5. Env: `ENTRA_TENANT_ID` (Directory/tenant ID from the app overview page), `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `AUTH_PROVIDERS=local,entra`.
+6. No additional API permissions needed (`openid email profile` suffices; default consent).
+7. Note: the `email` claim is **not guaranteed** on Entra — the server falls back to `preferred_username`/`upn`.
 
-## Eigene Login-Implementierung anschließen (Austausch-Nahtstelle)
+## Plugging in your own login (the replacement seam)
 
-Die Login-Methoden sind bewusst austauschbar gebaut — für spätere Projekte mit bestehendem Login (z. B. App-Session, anderes SSO):
+Login methods are deliberately swappable — for later projects with an existing login (e.g. app session, other SSO):
 
-1. Erzeuge eine `AuthnIdentity` (`{email, name, idp}`, [src/authn/identity.ts](src/authn/identity.ts)) aus deiner eigenen Authentifizierung.
-2. Rufe **`completeAuthorization(res, pending, identity)`** ([src/oauth/complete.ts](src/oauth/complete.ts)) — das ist die einzige Nahtstelle. Alles dahinter (Code, Tokens, JWT, MCP) bleibt unverändert.
+1. Produce an `AuthnIdentity` (`{email, name, idp}`, [src/authn/identity.ts](src/authn/identity.ts)) from your own authentication.
+2. Call **`completeAuthorization(res, pending, identity)`** ([src/oauth/complete.ts](src/oauth/complete.ts)) — that's the only seam. Everything after it (code, tokens, JWT, MCP) stays unchanged.
 
-Die bestehenden Methoden leben in [src/authn/](src/authn/) (lokales Formular in `loginPage.ts` + `POST /authorize` in [src/oauth/authorize.ts](src/oauth/authorize.ts), SSO in [src/authn/idp/](src/authn/idp/)) und können komplett ersetzt werden. Neuer IdP gefällig? `IdpProvider`-Objekt ([src/authn/idp/types.ts](src/authn/idp/types.ts)) + Registry-Eintrag genügt.
+The built-in methods live in [src/authn/](src/authn/) (local form in `loginPage.ts` + `POST /authorize` in [src/oauth/authorize.ts](src/oauth/authorize.ts), SSO in [src/authn/idp/](src/authn/idp/)) and can be replaced wholesale. Want another IdP? An `IdpProvider` object ([src/authn/idp/types.ts](src/authn/idp/types.ts)) plus a registry entry is enough.
 
-## Verifikation per curl
+## Verification with curl
 
-### 1. Discovery-Trigger: 401 mit WWW-Authenticate
+Or as a ready-made script (covers all steps below):
+
+```bash
+./scripts/test-flow.sh http://localhost:3000 test@example.com test1234
+```
+
+### 1. Discovery trigger: 401 with WWW-Authenticate
 
 ```bash
 curl -i -X POST http://localhost:3000/mcp \
@@ -104,13 +124,14 @@ curl -i -X POST http://localhost:3000/mcp \
 # → WWW-Authenticate: Bearer error="invalid_token", …, resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource"
 ```
 
-### 2. Well-Known-Dokumente (öffentlich)
+### 2. Well-known documents (public)
 
 ```bash
 curl -s http://localhost:3000/.well-known/oauth-protected-resource | jq
 curl -s http://localhost:3000/.well-known/oauth-protected-resource/mcp | jq   # RFC 9728 §3.1
 curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
-curl -s http://localhost:3000/.well-known/openid-configuration | jq           # Alias
+curl -s http://localhost:3000/.well-known/openid-configuration | jq           # alias
+curl -s http://localhost:3000/.well-known/mcp.json | jq                       # Notion discovery (icon, name)
 ```
 
 ### 3. DCR
@@ -122,63 +143,63 @@ curl -i -X POST http://localhost:3000/register \
 # → 201 Created + {"client_id":"…", …}
 ```
 
-### 4. Kompletter PKCE-Flow
+### 4. Full PKCE flow
 
 ```bash
-CID="<client_id aus Schritt 3>"
+CID="<client_id from step 3>"
 verifier=$(openssl rand -base64 96 | tr -dc 'a-zA-Z0-9-._~' | head -c 64)
 challenge=$(printf %s "$verifier" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
 
-# Login-Formular holen (Cookie-Jar merken!)
+# Fetch login form (keep the cookie jar!)
 curl -s -c jar "http://localhost:3000/authorize?response_type=code&client_id=$CID\
 &redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcb&state=xyz\
 &code_challenge=$challenge&code_challenge_method=S256\
 &resource=http%3A%2F%2Flocalhost%3A3000%2Fmcp"
-# → HTML-Formular; txn aus dem hidden field extrahieren:
+# → HTML form; extract txn from the hidden field:
 TXN=$(…)
 
-# Credentials absenden → 302 mit code
+# Submit credentials → 302 with code (+ iss, RFC 9207)
 curl -s -o /dev/null -w '%{redirect_url}' -b jar -c jar -X POST http://localhost:3000/authorize \
   -d "txn=$TXN&email=test@example.com&password=test1234"
-# → http://localhost:9999/cb?code=…&state=xyz
+# → http://localhost:9999/cb?code=…&state=xyz&iss=…
 
-# Code eintauschen → Tokens
+# Exchange code → tokens
 curl -s -X POST http://localhost:3000/token \
   -d "grant_type=authorization_code&code=$CODE&redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcb\
 &client_id=$CID&code_verifier=$verifier&resource=http%3A%2F%2Flocalhost%3A3000%2Fmcp"
 # → {"access_token":"…","token_type":"Bearer","expires_in":60,"refresh_token":"…","scope":"mcp"}
 ```
 
-### 5. MCP mit Token
+### 5. MCP with token
 
 ```bash
-# Wichtig: Accept-Header muss BEIDE Typen enthalten (Streamable-HTTP-Anforderung)
+# Important: the Accept header must include BOTH types (Streamable HTTP requirement)
 curl -s -X POST http://localhost:3000/mcp \
   -H "Authorization: Bearer $AT" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}'
-# → SSE: Identität des eingeloggten Nutzers (email, name, clientId, scopes, expiresAt)
+# → SSE: identity of the logged-in user (email, name, idp, notionUserId, clientId, scopes, expiresAt)
 ```
 
-### 6. Refresh-Flow (bei `ACCESS_TOKEN_TTL=60`)
+### 6. Refresh flow (with `ACCESS_TOKEN_TTL=60`)
 
 ```bash
 sleep 65
 curl -si -X POST http://localhost:3000/mcp -H "Authorization: Bearer $AT" …   # → 401 invalid_token
 curl -s -X POST http://localhost:3000/token \
-  -d "grant_type=refresh_token&refresh_token=$RT&client_id=$CID"             # → neues Token-Paar (Rotation!)
+  -d "grant_type=refresh_token&refresh_token=$RT&client_id=$CID"             # → new token pair (rotation!)
 curl -s -X POST http://localhost:3000/token \
-  -d "grant_type=refresh_token&refresh_token=$RT&client_id=$CID"             # → invalid_grant (altes Token verbraucht)
+  -d "grant_type=refresh_token&refresh_token=$RT&client_id=$CID"             # → invalid_grant (old token consumed)
 ```
 
-## MCP Inspector (beste Fehlermeldungen, selber Flow wie Notion)
+## MCP Inspector (best error messages, same flow as Notion)
 
 ```bash
 npx @modelcontextprotocol/inspector@latest
-# UI: http://localhost:6274 → Transport: "Streamable HTTP" → URL: http://localhost:3000/mcp
-# → Guided OAuth Flow: der Inspector macht DCR selbst (Log zeigt seine redirect_uris:
-#   http://127.0.0.1:6274/oauth/callback), öffnet das Login-Formular, exchanged den Code.
+# UI: http://localhost:6274 → transport: "Streamable HTTP" → URL: http://localhost:3000/mcp
+# → Guided OAuth flow: the Inspector does DCR itself (watch the log for its redirect_uris:
+#   http://127.0.0.1:6274/oauth/callback), opens the login form, exchanges the code.
 ```
 
 ## Docker
@@ -190,105 +211,109 @@ docker run --rm -p 3000:3000 --env-file .env \
   test-dcr-mcp
 ```
 
-Multi-Stage-Build (node:22-alpine), non-root (`USER node`), `HEALTHCHECK` auf `/health`, `VOLUME /data` für das Statefile.
+Multi-stage build (node:22-alpine), non-root (`USER node`), `HEALTHCHECK` on `/health`, `VOLUME /data` for the state file.
 
-## HTTPS-Tunnel (Notion braucht öffentliches HTTPS)
+## HTTPS tunnel (Notion requires public HTTPS)
 
 ```bash
 cloudflared tunnel --url http://localhost:3000
-# → https://<zufall>.trycloudflare.com
-# Server mit BASE_URL=https://<zufall>.trycloudflare.com neu starten (Issuer-Match!)
+# → https://<random>.trycloudflare.com
+# Restart the server with BASE_URL=https://<random>.trycloudflare.com (issuer match!)
 ```
 
-## Deploy auf EasyPanel
+## Deploying on EasyPanel
 
-1. Repo auf GitHub pushen (Dockerfile liegt im Root).
-2. EasyPanel → **Create Service → App** → Git-Repo verbinden → Dockerfile wird automatisch erkannt.
-3. **Env** setzen: `BASE_URL=https://<app>.<domain>`, `TOKEN_SECRET`, `SESSION_SECRET` (je ≥32 Zeichen), `USERS_JSON`, `ACCESS_TOKEN_TTL=60` (zum Testen), `STATE_FILE=/data/state.json`.
-4. **Volume** anlegen → Mount-Pfad `/data` (persistiert DCR-Clients + Refresh-Tokens über Redeploys).
-5. **Domain** zuweisen, HTTPS aktivieren (Traefik + Let's Encrypt automatisch), Container-Port **3000**.
-6. Deploy → prüfen: `curl https://<domain>/health` + beide Well-Known-Docs.
+1. Push the repo to GitHub (Dockerfile is at the root).
+2. EasyPanel → **Create Service → App** → connect the Git repo → the Dockerfile is detected automatically.
+3. Set **env**: `BASE_URL=https://<app>.<domain>`, `TOKEN_SECRET`, `SESSION_SECRET` (≥32 chars each), `USERS_JSON`, `ACCESS_TOKEN_TTL=60` (for testing), `STATE_FILE=/data/state.json`.
+4. Create a **volume** → mount path `/data` (persists DCR clients + refresh tokens across redeploys).
+5. Assign a **domain**, enable HTTPS (Traefik + Let's Encrypt automatic), container port **3000**.
+6. Deploy → verify: `curl https://<domain>/health` + both well-known docs.
 
-## Anbindung an Notion
+## Connecting Notion
 
-Voraussetzung: Ein Owner/Admin hat **Custom MCP servers** freigeschaltet (`Settings → Notion AI → AI connectors → Enable Custom MCP servers`).
+Prerequisite: an owner/admin has enabled **Custom MCP servers** (`Settings → Notion AI → AI connectors → Enable Custom MCP servers`).
 
-1. `Settings → Notion AI → AI connectors → Custom MCP servers` → Server per URL hinzufügen: **`https://<domain>/mcp`** — die URL **vollständig inkl. `/mcp`** eintragen! (Notion verwendet die eingegebene URL als MCP-Endpunkt; bei Root-URL landet der Traffic auf `POST /` → 404, siehe „Erkenntnisse" unten.)
-2. Es erscheint ein **„Sign in with OAuth"-Button** (kein Token-Feld).
-3. Klick → Browser → Login-Formular (E-Mail/Passwort aus `USERS_JSON`) → Redirect zurück.
-4. Server erscheint unter *All sources → MCP servers*; `whoami` liefert die Identität des angemeldeten Nutzers (`email`/`name` aus `USERS_JSON`) plus die `notionUserId` des verbindenden Notion-Accounts.
-5. **Tools erscheinen lazy:** Notion ruft `tools/list` erst auf, wenn ein Agent die Quelle benutzt. Test-Prompt: *„Welche Tools stellt der Test-DCR-MCP-Server bereit? Rufe dann das Tool whoami auf."*
+1. `Settings → Notion AI → AI connectors → Custom MCP servers` → add the server by URL: **`https://<domain>/mcp`** — enter the URL **in full, including `/mcp`**! (Notion uses the entered URL as the MCP endpoint; with the root URL, traffic lands on `POST /` → 404 — see "Findings" below.)
+2. A **"Sign in with OAuth" button** appears (no token field).
+3. Click → browser → login form (email/password from `USERS_JSON`) → redirect back.
+4. The server appears under *All sources → MCP servers*; `whoami` returns the identity of the signed-in user (`email`/`name` from `USERS_JSON`) plus the `notionUserId` of the connecting Notion account.
+5. **Tools appear lazily:** Notion only calls `tools/list` when an agent actually uses the source. Test prompt: *"Which tools does the Test-DCR-MCP-Server provide? Then call the whoami tool."*
 
-**Im Server-Log beobachten** (alles JSON-Zeilen): der initiale 401, PRM-Fetch, AS-Metadata-Fetch, **der DCR-Body mit Notions echten `redirect_uris`**, Authorize/Login, Token-Exchange — und nach 60 s (bei `ACCESS_TOKEN_TTL=60`) der selbstständige Refresh durch Notion.
+**Watch the server log** (all JSON lines): the initial 401, PRM fetch, AS metadata fetch, **the DCR body with Notion's real `redirect_uris`**, authorize/login, token exchange — and after 60s (with `ACCESS_TOKEN_TTL=60`) Notion's automatic refresh.
 
-## Architektur-Notizen
+## Spec status & outlook (MCP 2026-07-28)
 
-- **Stateless MCP-Transport**: pro `POST /mcp` frische `McpServer`+`StreamableHTTPServerTransport`-Instanz (`sessionIdGenerator: undefined`). `GET /mcp` → 405 (kein Standalone-SSE ohne Sessions).
-- **Was wird wo gespeichert?** Access Tokens (JWT) nirgends — nur signiert/verifiziert. Refresh Tokens, DCR-Clients, Auth-Codes, Pending-Logins in Maps; davon werden Clients + Refresh-Tokens ins `STATE_FILE` persistiert (debounced, atomar via tmp+rename). Auth-Codes/Pending (10-min-TTL) bleiben bewusst flüchtig. Nutzer kommen immer aus `USERS_JSON`.
-- **Login-Session**: HMAC-signiertes Cookie (`HttpOnly; SameSite=Lax`; `Secure` nur bei HTTPS) mit JSON-Payload `{email, name, idp}` — funktioniert für lokale User und SSO-Identitäten gleichermaßen; nachfolgende Authorize-Requests überspringen den Login.
-- **Authn-Schicht** ([src/authn/](src/authn/)): Login-Methoden (lokal, Google, Entra) erzeugen eine `AuthnIdentity` und enden an der Nahtstelle `completeAuthorization` — austauschbar für spätere Projekte mit eigenem Login.
-- **Express 5**, weil `@modelcontextprotocol/sdk` selbst davon abhängt (keine Duplikat-Installation, `req.auth`-Augment greift).
+This server speaks wire revision **2025-06-18/2025-11-25** (via `@modelcontextprotocol/sdk` v1) — that's what Notion understands today, and v1 keeps receiving fixes for at least 6 months. Spec revision **2026-07-28** has been released; assessment for this project:
 
-## Spec-Stand & Ausblick (MCP 2026-07-28)
+- **Stateless is now the spec's direction** — this server is already built that way (`sessionIdGenerator: undefined`, fresh instance per request). The biggest breaking changes (sessions/handshake/SSE resumability removal) don't affect us.
+- **RFC 9207 (`iss` in authorization responses) is implemented** — in both the code redirect and error redirects.
+- **DCR (RFC 7591) is deprecated** in favor of *Client ID Metadata Documents* (CIMD). It remains available for backwards compatibility, and **Notion currently only speaks DCR** — this server stays the working path. Long-term, CIMD would make `/register` + the client store obsolete (less state, not more) — a sensible follow-up feature once clients (Inspector/Notion) speak CIMD.
+- **SDK v2** (scoped packages: `@modelcontextprotocol/server`, official Express/Fastify/Hono adapters, `createMcpHandler` serving both revisions at one endpoint, v1→v2 codemod): migrate after stable release; for Fastify ports the official adapter covers the previous `reply.raw` manual work.
 
-Dieser Server spricht die Wire-Revision **2025-06-18/2025-11-25** (via `@modelcontextprotocol/sdk` v1) — das ist das, was Notion heute versteht, und v1 erhält noch mindestens 6 Monate Fixes. Die Spec-Revision **2026-07-28** ist erschienen; Einordnung für dieses Projekt:
+## Findings from the real Notion E2E test (measured, not guessed)
 
-- **Stateless ist jetzt Spec-Richtung** — dieser Server ist bereits so gebaut (`sessionIdGenerator: undefined`, neue Instanz pro Request). Die größten Breaking Changes (weg mit Sessions/Handshake/SSE-Resumability) betreffen uns nicht.
-- **RFC 9207 (`iss` in Authorization Responses) ist umgesetzt** — sowohl im Code-Redirect als auch in Fehler-Redirects.
-- **DCR (RFC 7591) ist deprecated** zugunsten *Client ID Metadata Documents* (CIMD). Bleibt aus Backwards-Kompatibilität verfügbar, und **Notion kann aktuell nur DCR** — dieser Server bleibt der funktionierende Pfad. Perspektivisch würde CIMD `/register` + Client-Store obsolet machen (weniger State, nicht mehr) — ein sinnvolles Folge-Feature, sobald Clients (Inspector/Notion) CIMD sprechen.
-- **SDK v2** (scoped Pakete: `@modelcontextprotocol/server`, offizielle Express/Fastify/Hono-Adapter, `createMcpHandler` für beide Revisionen an einem Endpoint, Codemod v1→v2): Migration erst nach Stable-Release; für Fastify-Portierungen (z. B. image-ai-portal) deckt der offizielle Adapter den bisherigen `reply.raw`-Handbetrieb ab.
-
-## Erkenntnisse aus dem Notion-E2E-Test (gemessen, nicht geraten)
-
-Alles Folgende stammt aus den Request-Logs eines echten Connects mit Notion Custom Agents (Stand 2026-08):
+Everything below comes from request logs of an actual connect with Notion Custom Agents (as of 2026-08):
 
 ### Discovery & DCR
 
-- **DCR ohne Vorab-Registrierung funktioniert.** Notion registriert sich selbst mit `client_name: "Notion"`, `token_endpoint_auth_method: "none"`, Scope `mcp`.
-- **Notions Redirect-URI:** `https://app.notion.com/workflows/mcp/oauth/callback`
-- User-Agent der serverseitigen Calls: `Notion-MCP-Client/1.0`.
-- Notion probiert zusätzlich `GET /.well-known/mcp.json` sowie `HEAD/GET /` — 404 ist ok, bricht nichts.
-- **`/.well-known/mcp.json` ist Notions Discovery-Konvention** (Name, `description`, **`icon`**, `endpoint`) und wird beim Verbinden abgerufen — dieser Server liefert das Dokument inkl. `icon` (selbst gehostet unter `/icon.png`, generiert via `scripts/generate-icon.mjs`). Zusätzlich trägt `serverInfo` ein `icons`-Array (MCP-Spec 2025-11-25, SEP-973) — damit lässt sich das Icon im Verbindungs-Dialog beeinflussen, ohne dass Notion-seitig etwas einstellbar wäre. Hinweis: Notion cached das Icon offenbar pro Verbindung — bei Änderungen Connector trennen und neu verbinden.
+- **DCR without pre-registration works.** Notion self-registers with `client_name: "Notion"`, `token_endpoint_auth_method: "none"`, scope `mcp`.
+- **Notion's redirect URI:** `https://app.notion.com/workflows/mcp/oauth/callback`
+- User agent of server-side calls: `Notion-MCP-Client/1.0`.
+- **`/.well-known/mcp.json` is Notion's discovery convention** (name, `description`, **`icon`**, `endpoint`) and is fetched when connecting — this server serves the document including `icon` (self-hosted at `/icon.png`, generated via `scripts/generate-icon.mjs`). Additionally, `serverInfo` carries an `icons` array (MCP spec 2025-11-25, SEP-973) — that's how the icon in the connection dialog can be influenced without any Notion-side setting. Note: Notion appears to cache the icon per connection — disconnect and reconnect to see changes.
 
-### Authorize-Request — Notion sendet Extra-Parameter
+### Authorize request — Notion sends extra parameters
 
 ```
 response_type=code, client_id, redirect_uri, state,
 code_challenge, code_challenge_method=S256,
-scope=mcp, resource=<siehe unten>,
+scope=mcp, resource=<see below>,
 nonce=<…>, prompt=consent,
-notion_user_id=<UUID des Notion-Nutzers>
+notion_user_id=<UUID of the Notion user>
 ```
 
-- **`notion_user_id`** ist die Notion-User-ID der Person, die den Connector verbindet. Dieser Server reicht sie als Custom Claim `notion_user_id` in den JWT durch — `whoami` zeigt sie an. Damit kann ein MCP-Server **pro Notion-Nutzer unterscheiden**, auch wenn alle dasselbe Server-Login nutzen. (Achtung: der Wert kommt aus einem Query-Parameter am Authorize-Endpoint — für ernsthafte Nutzung wäre er zu verifizieren, für Identitäts-Experimente reicht er.)
-- `nonce` und `prompt=consent` werden ebenfalls mitgeschickt (OIDC-Anklänge), müssen aber nicht ausgewertet werden.
+- **`notion_user_id`** is the Notion user ID of the person connecting the connector. This server passes it through as a custom `notion_user_id` JWT claim — `whoami` shows it. That lets an MCP server **distinguish per Notion user** even when everyone shares the same server login. (Caveat: the value arrives as a query parameter on the authorize endpoint — fine for identity experiments, would need verification for serious use.)
+- `nonce` and `prompt=consent` are also sent (OIDC flavor) but don't need to be evaluated.
 
-### ⚠️ Wichtigster Praxis-Punkt: die eingegebene URL IST der Endpunkt
+### ⚠️ Most important practical point: the entered URL IS the endpoint
 
-- Notion verwendet die **beim Anlegen des Connectors eingegebene URL** als Endpunkt für den gesamten MCP-Traffic — und auch als RFC-8707-`resource`-Parameter im ganzen Flow.
-- Wird der Connector **mit der Root-URL** (`https://host/`) eingetragen, sendet Notion seine JSON-RPC-Calls an **`POST /`** — nicht an `/mcp`. Symptom im Notion-Agent: *„Failed to connect to MCP server"*, im Server-Log: `POST / → 404` (und davor erfolgreiche Token-Refreshes — der OAuth-Teil läuft ja).
-- **Lösung: Connector mit der vollen URL inkl. Pfad eintragen, also `https://host/mcp`.** Dieser Server liefert MCP bewusst nur auf `/mcp` aus (kein Root-Mount), damit das Muster auch auf Hosts mit herkömmlicher API auf `/` sauber bleibt. `GET /` zeigt eine HTML-Info-Seite mit der korrekten URL.
-- Der `resource`-Parameter folgt derselben Regel: bei Eintrag mit `/mcp` kommt `resource=…/mcp`, bei Root-Eintrag `resource=…/`. Dieser Server akzeptiert beide und loggt Mismatches (Lernmodus).
+- Notion uses the **URL entered when creating the connector** as the endpoint for all MCP traffic — and as the RFC 8707 `resource` parameter throughout the flow.
+- If the connector is added **with the root URL** (`https://host/`), Notion sends its JSON-RPC calls to **`POST /`** — not `/mcp`. Symptom in the Notion agent: *"Failed to connect to MCP server"*; in the server log: `POST / → 404` (preceded by successful token refreshes — the OAuth part works).
+- **Fix: enter the connector with the full URL including the path, i.e. `https://host/mcp`.** This server deliberately serves MCP only on `/mcp` (no root mount), keeping the pattern clean on hosts that also serve a conventional API on `/`. `GET /` shows an HTML info page with the correct URL.
+- The `resource` parameter follows the same rule: entered with `/mcp` → `resource=…/mcp`; root entry → `resource=…/`. This server accepts both and logs mismatches (learning mode).
 
-### Token-Verhalten
+### Tool calls
 
-- **Notion refresht sofort nach dem Connect mehrfach** (parallel/ redundante Worker) — Refresh-Rotation muss also sauber funktionieren, sonst bricht die Verbindung direkt nach dem Aufbau.
-- Danach wird der Refresh-Grant bei kurzer `ACCESS_TOKEN_TTL` (60 s) erwartungsgemäß vor jedem weiteren MCP-Call genutzt.
-- PKCE ist S256, Code-Exchange sofort nach Redirect. Alles standardkonform.
+- **`arguments` is optional in the MCP spec — but de facto mandatory at two layers.** On the first `whoami` call, the Notion LLM omitted `arguments` → Notion's client rejected it **before sending**: `payload.toolArguments should be defined, instead was 'undefined'` (Notion-internal field naming; the call never reached the server). Retry with `arguments: {}` → success.
+- **Server-side caution too:** the MCP SDK rejects missing `arguments` when a tool is registered with `inputSchema` (`-32602: expected object, received undefined`) — even with an empty schema `{}`. **Fix: register parameterless tools without `inputSchema` entirely** (callback signature becomes `(extra) => …`); then the server accepts both variants. `whoami` is built that way here.
+- After connecting, Notion also probes `GET /mcp` (SSE stream) → our stateless server answers `405` — Notion tolerates that and falls back to POST.
+- After `initialize`, Notion sends `notifications/initialized` → response `202` (no body), normal.
+- With `ACCESS_TOKEN_TTL=60`, Notion refreshes the token **before almost every MCP call** (in the log: `refresh_token` grant right before each `POST /mcp` batch). Works, but noisy — raise the TTL after testing the refresh path.
 
-### Tool-Aufrufe
+### Token behavior
 
-- **`arguments` ist in der MCP-Spec optional — in der Praxis aber zweistufig Pflicht.** Beim ersten `whoami`-Aufruf ließ das Notion-LLM `arguments` weg → Notions Client lehnte **vor dem Absenden** ab: `payload.toolArguments should be defined, instead was 'undefined'` (Notion-interne Feldbezeichnung; der Call erreichte den Server nie). Retry mit `arguments: {}` → Erfolg.
-- **Auch serverseitig Vorsicht:** Das MCP-SDK lehnt fehlende `arguments` ab, wenn das Tool mit `inputSchema` registriert ist (`-32602: expected object, received undefined`) — selbst bei leerem Schema `{}`. **Fix: parameterlose Tools ganz ohne `inputSchema` registrieren** (Callback-Signatur ist dann `(extra) => …`); so akzeptiert der Server beide Varianten. `whoami` ist hier entsprechend gebaut.
-- Notion probiert nach dem Connect auch `GET /mcp` (SSE-Stream) → unser stateless Server antwortet `405` — Notion toleriert das und fällt auf POST zurück.
-- Nach `initialize` schickt Notion `notifications/initialized` → Antwort `202` (kein Body), normal.
-- Mit `ACCESS_TOKEN_TTL=60` refreshed Notion **vor nahezu jedem MCP-Call** den Token (im Log: `refresh_token`-Grant direkt vor jedem `POST /mcp`-Batch). Funktioniert, erzeugt aber Log-Rauschen — nach dem Refresh-Test ruhig TTL hochsetzen.
+- **Notion refreshes multiple times immediately after connecting** (parallel/redundant workers) — refresh rotation must work cleanly or the connection breaks right after setup.
+- Afterwards, with a short `ACCESS_TOKEN_TTL` (60s), the refresh grant is used as expected before further MCP calls.
+- PKCE is S256, code exchange immediately after redirect. All standard-compliant.
 
-## Bekannte Grenzen (bewusst)
+## Architecture notes
 
-- Klartext-Passwörter in der Env; Passwort-Vergleich ohne Hashing.
-- Kein Rate-Limiting, keine CSRF-Tokens am Login-Form (Txn-Id ist zufällig, reicht für den Test).
-- `resource`-Mismatch wird nur geloggt, nicht abgelehnt (Lernmodus).
-- Ohne `STATE_FILE` überleben Registrierungen/Refresh-Tokens keinen Restart → Notion registriert sich dann neu und der Nutzer loggt sich neu ein.
-- SSO: `email_verified` wird nur bei Google geprüft (bei Entra vertrauen wir dem Tenant); ohne Allowlist ist der Login für alle Accounts des IdP offen.
-- Der SSO-Flow ist ohne echte IdP-App-Registrierung nicht End-zu-End-getestet (strukturell getestet: Start-Redirects inkl. PKCE-Parametern, Fehlerpfade, Provider-Abschaltung).
+- **Stateless MCP transport**: fresh `McpServer`+`StreamableHTTPServerTransport` instance per `POST /mcp` (`sessionIdGenerator: undefined`). `GET /mcp` → 405 (no standalone SSE without sessions).
+- **What is stored where?** Access tokens (JWT) nowhere — only signed/verified. Refresh tokens, DCR clients, auth codes, pending logins in Maps; of these, clients + refresh tokens are persisted to `STATE_FILE` (debounced, atomic via tmp+rename). Auth codes/pending (10-min TTL) deliberately stay volatile. Users always come from `USERS_JSON`.
+- **Login session**: HMAC-signed cookie (`HttpOnly; SameSite=Lax`; `Secure` only on HTTPS) with JSON payload `{email, name, idp}` — works for local users and SSO identities alike; subsequent authorize requests skip the login.
+- **Authn layer** ([src/authn/](src/authn/)): login methods (local, Google, Entra) produce an `AuthnIdentity` and end at the `completeAuthorization` seam — swappable for later projects with their own login.
+- **Express 5**, because `@modelcontextprotocol/sdk` itself depends on it (no duplicate installation, the `req.auth` augmentation applies).
+
+## Known limits (deliberate)
+
+- Plaintext passwords in env; password comparison without hashing.
+- No rate limiting, no CSRF tokens on the login form (txn ID is random, sufficient for the test).
+- `resource` mismatch is only logged, not rejected (learning mode).
+- Without `STATE_FILE`, registrations/refresh tokens don't survive a restart → Notion will re-register and the user logs in again.
+- SSO: `email_verified` is only checked for Google (on Entra we trust the tenant); without an allowlist, login is open to all accounts of the IdP.
+- The SSO flow has not been tested end-to-end without a real IdP app registration (structurally tested: start redirects incl. PKCE parameters, error paths, provider deactivation).
+- **This is a test/reference server.** Before any production use: real user management, hashed credentials, rate limiting, stricter validation, key management — or better, use it as the reference it is meant to be.
+
+## License
+
+[MIT](LICENSE) © LOUPZ GmbH & Co. KG
