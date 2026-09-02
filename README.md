@@ -106,6 +106,18 @@ Login methods are deliberately swappable — for later projects with an existing
 
 The built-in methods live in [src/authn/](src/authn/) (local form in `loginPage.ts` + `POST /authorize` in [src/oauth/authorize.ts](src/oauth/authorize.ts), SSO in [src/authn/idp/](src/authn/idp/)) and can be replaced wholesale. Want another IdP? An `IdpProvider` object ([src/authn/idp/types.ts](src/authn/idp/types.ts)) plus a registry entry is enough.
 
+## Self-explaining MCP servers (instructions / descriptions / nextSteps)
+
+A pattern worth adopting in every MCP server built from this reference — three layers, all implemented here:
+
+1. **`instructions` in the InitializeResult** ([src/mcp/server.ts](src/mcp/server.ts)) — the spec-sanctioned channel for "how to work with this server". Clients place the text in the system prompt, so it is present *before the first tool call*. Keep it lean: workflow order, rules, limits (a few hundred characters, not an essay).
+2. **Tool descriptions that name the follow-up step** — each description says what to try next (`whoami` → `echo` → `slow_task`).
+3. **`nextSteps` in every response** — via the shared [`respond(payload, nextSteps?)`](src/mcp/respond.ts) helper. Two rules make it work instead of noise:
+   - **Concrete**: pre-filled call values (`echo with {"text": "<any string>"}`), never abstract prose.
+   - **Conditional**: only steps that actually apply in the current context (see `echo`/`slow_task` — different nextSteps depending on input). Tokens spent on inapplicable hints are worse than no hints.
+
+Note: `instructions` is a spec field; `nextSteps` is a convention (JSON payload convention, client-agnostic). Both cost tokens on every call/response — budget them.
+
 ## Verification with curl
 
 Or as a ready-made script (covers all steps below):

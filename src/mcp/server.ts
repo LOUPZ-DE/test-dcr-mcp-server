@@ -4,16 +4,31 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { config } from '../config.js';
 import { log } from '../util/log.js';
+import { respond } from './respond.js';
+
+/**
+ * Ebene 1 der Selbsterklärung: `instructions` im InitializeResult.
+ * Clients legen diesen Text in den System-Prompt — er steht also VOR dem
+ * ersten Tool-Aufruf bereit. Knapp halten: Arbeitsablauf, Regeln, Grenzen.
+ */
+const INSTRUCTIONS = [
+  'This server is an OAuth/DCR reference with three test tools.',
+  'Suggested order: 1) whoami — verify authentication and identity passthrough (shows email, name, idp, notionUserId). 2) echo — verify argument passing. 3) slow_task — verify timeout behavior.',
+  'Rules: echo and slow_task require arguments; call whoami with arguments={}. slow_task caps at 60 seconds. Tool answers are JSON text blocks; when a "nextSteps" field is present, prefer those follow-ups.',
+].join(' ');
 
 function createMcpServer(): McpServer {
   // serverInfo.icons (MCP-Spec 2025-11-25, SEP-973): visuelle Identität des Servers
   // für Clients, die sie rendern (z. B. Verbindungs-Dialogs).
-  const server = new McpServer({
-    name: config.SERVER_NAME,
-    version: '0.1.0',
-    websiteUrl: config.BASE_URL,
-    icons: [{ src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] }],
-  });
+  const server = new McpServer(
+    {
+      name: config.SERVER_NAME,
+      version: '1.0.0',
+      websiteUrl: config.BASE_URL,
+      icons: [{ src: `${config.BASE_URL}/icon.png`, mimeType: 'image/png', sizes: ['256x256'] }],
+    },
+    { instructions: INSTRUCTIONS },
+  );
 
   // 1. whoami — verifiziert Identity-Passthrough: liest die Identität aus dem Bearer-Token.
   // Bewusst OHNE inputSchema registriert: Das SDK zod-validiert sonst auch `undefined`
@@ -22,12 +37,13 @@ function createMcpServer(): McpServer {
   server.registerTool(
     'whoami',
     {
-      description: 'Gibt den authentifizierten Nutzer des MCP-Servers zurück',
+      // Ebene 2: Beschreibung benennt den Folgeschritt.
+      description: 'Returns the authenticated user of this MCP server (email, name, idp, notionUserId). Start here to verify auth, then try echo for argument passing.',
     },
     async (extra) => {
       const authInfo = extra.authInfo;
       if (!authInfo) {
-        return { content: [{ type: 'text', text: 'unauthenticated (kein AuthInfo im Request)' }] };
+        return respond({ status: 'unauthenticated', hint: 'no AuthInfo on request (should not happen — bearer middleware guards /mcp)' });
       }
       const identity = {
         email: authInfo.extra?.email,
@@ -38,7 +54,11 @@ function createMcpServer(): McpServer {
         scopes: authInfo.scopes,
         expiresAt: authInfo.expiresAt ? new Date(authInfo.expiresAt * 1000).toISOString() : undefined,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(identity, null, 2) }] };
+      // Ebene 3: nextSteps — konkret ausgefüllt, konditional (hier: immer sinnvoll)
+      return respond(identity, [
+        'echo with {"text": "<any string>"} to verify argument passing',
+        `slow_task with {"seconds": 3} to verify timeout behavior (token expires ${identity.expiresAt ?? 'unknown'})`,
+      ]);
     },
   );
 
@@ -46,30 +66,43 @@ function createMcpServer(): McpServer {
   server.registerTool(
     'echo',
     {
-      description: 'Gibt den übergebenen Text zurück',
-      inputSchema: { text: z.string().describe('Der Text, der zurückgegeben wird') },
+      description: 'Echoes the given text back. Verifies argument passing; for auth identity use whoami instead.',
+      inputSchema: { text: z.string().describe('The text to echo back') },
     },
-    async ({ text }) => ({ content: [{ type: 'text', text }] }),
+    async ({ text }) =>
+      respond(
+        { echo: text, length: text.length },
+        // nextSteps konditional: langer Input → Hinweis auf slow_task als nächstes Experiment
+        text.length > 200
+          ? ['slow_task with {"seconds": 5} to verify timeout behavior with longer-running calls']
+          : ['whoami to verify which identity this call carries'],
+      ),
   );
 
   // 3. slow_task — verifiziert Timeout-Verhalten (honoriert Abort via extra.signal)
   server.registerTool(
     'slow_task',
     {
-      description: 'Wartet n Sekunden und antwortet dann',
+      description: 'Waits n seconds, then answers. Verifies client timeout behavior. Cap: 60s.',
       inputSchema: {
-        seconds: z.number().min(0).max(60).default(5).describe('Wartezeit in Sekunden (max. 60)'),
+        seconds: z.number().min(0).max(60).default(5).describe('Wait time in seconds (max. 60)'),
       },
     },
     async ({ seconds }, extra) => {
       const deadline = Date.now() + seconds * 1000;
       while (Date.now() < deadline) {
         if (extra.signal.aborted) {
-          return { content: [{ type: 'text', text: `abgebrochen nach ${Math.round((seconds * 1000 - (deadline - Date.now())) / 1000)}s` }] };
+          return respond({ aborted: true, waitedSeconds: Math.round((seconds * 1000 - (deadline - Date.now())) / 1000) });
         }
         await new Promise((r) => setTimeout(r, Math.min(250, deadline - Date.now())));
       }
-      return { content: [{ type: 'text', text: `${seconds} Sekunden gewartet.` }] };
+      return respond(
+        { waitedSeconds: seconds },
+        // Konditional: nahe am Cap → Hinweis auf die 60s-Grenze als Folgeexperiment
+        seconds >= 30
+          ? ['values above 60 are rejected by the schema — that cap is the demonstration']
+          : [`slow_task with {"seconds": ${Math.min(60, seconds * 4)}} to approach the client timeout`],
+      );
     },
   );
 
