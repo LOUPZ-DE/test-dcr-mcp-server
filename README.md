@@ -34,7 +34,7 @@ Notion Custom Agents accept custom MCP servers over OAuth **only if the server s
 - **Request logging on all auth endpoints** (JSON lines, secrets redacted) — shows exactly what Notion sends
 - **State file persistence** (optional): DCR clients + refresh tokens survive restarts (`STATE_FILE` + volume)
 - **Server icon**: `/.well-known/mcp.json` (Notion's discovery convention) + `serverInfo.icons` (SEP-973)
-- Tools: `whoami` (identity passthrough), `echo`, `slow_task` (timeout behavior)
+- Tools: `whoami` (identity passthrough), `echo`, `slow_task` (timeout behavior), `log_note` (write-tier demo: writes to the server log, non-destructive)
 
 ## Quickstart (local)
 
@@ -115,6 +115,35 @@ A pattern worth adopting in every MCP server built from this reference — three
 3. **`nextSteps` in every response** — via the shared [`respond(payload, nextSteps?)`](src/mcp/respond.ts) helper. Two rules make it work instead of noise:
    - **Concrete**: pre-filled call values (`echo with {"text": "<any string>"}`), never abstract prose.
    - **Conditional**: only steps that actually apply in the current context (see `echo`/`slow_task` — different nextSteps depending on input). Tokens spent on inapplicable hints are worse than no hints.
+
+## Tool annotations & title (how clients decide between auto-run and ask-first)
+
+Another pattern to adopt from the start — demonstrated by all four tools here.
+
+**The problem:** without annotations, every tool looks write-capable and potentially destructive to clients, because the spec defaults are:
+
+| Annotation | Default | Meaning |
+|---|---|---|
+| `readOnlyHint` | `false` | Tool does not modify state |
+| `destructiveHint` | `true` (only meaningful when `readOnlyHint: false`) | May delete/overwrite data irreversibly |
+| `idempotentHint` | `false` | Repeated identical calls are safe |
+| `openWorldHint` | `true` | Interacts with external, dynamic data |
+
+So a cautious client (e.g. Notion's "Always ask") has to gate **everything** you don't annotate.
+
+**The three tiers, as implemented here:**
+
+| Tier | Annotations | Example here |
+|---|---|---|
+| Read-only | `readOnlyHint: true` (+ `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`) | `whoami`, `echo`, `slow_task` |
+| **Writing, non-destructive** (the interesting middle tier) | `readOnlyHint: false`, **`destructiveHint: false`** | `log_note` — writes to the server log, like a draft, not a send |
+| Writing, destructive | `readOnlyHint: false`, `destructiveHint: true` | (documented only — e.g. a real `send_email`) |
+
+The middle tier is where `destructiveHint: false` earns its keep: without it, the default would classify a draft-style write as an irreversible action.
+
+**`title`** (BaseMetadata): clients like Notion display `title` instead of the snake_case `name` (`"Write note to server log"` instead of `log_note`). Set it on every tool.
+
+**How Notion surfaces this:** per-tool toggles plus a connector-level default ("Always ask" vs. "Run automatically"); correctly annotated read-only tools are the ones a client can safely auto-run.
 
 Note: `instructions` is a spec field; `nextSteps` is a convention (JSON payload convention, client-agnostic). Both cost tokens on every call/response — budget them.
 

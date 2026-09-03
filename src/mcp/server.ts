@@ -12,9 +12,9 @@ import { respond } from './respond.js';
  * ersten Tool-Aufruf bereit. Knapp halten: Arbeitsablauf, Regeln, Grenzen.
  */
 const INSTRUCTIONS = [
-  'This server is an OAuth/DCR reference with three test tools.',
-  'Suggested order: 1) whoami — verify authentication and identity passthrough (shows email, name, idp, notionUserId). 2) echo — verify argument passing. 3) slow_task — verify timeout behavior.',
-  'Rules: echo and slow_task require arguments; call whoami with arguments={}. slow_task caps at 60 seconds. Tool answers are JSON text blocks; when a "nextSteps" field is present, prefer those follow-ups.',
+  'This server is an OAuth/DCR reference with four test tools.',
+  'Suggested order: 1) whoami — verify authentication and identity passthrough (shows email, name, idp, notionUserId). 2) echo — verify argument passing. 3) slow_task — verify timeout behavior. 4) log_note — the only writing tool (writes to the server log, non-destructive).',
+  'Rules: echo, slow_task and log_note require arguments; call whoami with arguments={}. slow_task caps at 60 seconds. Tool answers are JSON text blocks; when a "nextSteps" field is present, prefer those follow-ups.',
 ].join(' ');
 
 function createMcpServer(): McpServer {
@@ -39,6 +39,10 @@ function createMcpServer(): McpServer {
     {
       // Ebene 2: Beschreibung benennt den Folgeschritt.
       description: 'Returns the authenticated user of this MCP server (email, name, idp, notionUserId). Start here to verify auth, then try echo for argument passing.',
+      // title + annotations (siehe README-Abschnitt "Tool annotations"): clients wie Notion
+      // zeigen title statt des snake_case-Namens und steuern Auto-Run vs. Nachfragen.
+      title: 'Who am I (identity check)',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (extra) => {
       const authInfo = extra.authInfo;
@@ -58,6 +62,7 @@ function createMcpServer(): McpServer {
       return respond(identity, [
         'echo with {"text": "<any string>"} to verify argument passing',
         `slow_task with {"seconds": 3} to verify timeout behavior (token expires ${identity.expiresAt ?? 'unknown'})`,
+        'log_note with {"note": "..."} — the write-tier demo (readOnlyHint: false, destructiveHint: false)',
       ]);
     },
   );
@@ -67,7 +72,9 @@ function createMcpServer(): McpServer {
     'echo',
     {
       description: 'Echoes the given text back. Verifies argument passing; for auth identity use whoami instead.',
+      title: 'Echo text',
       inputSchema: { text: z.string().describe('The text to echo back') },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ text }) =>
       respond(
@@ -84,9 +91,11 @@ function createMcpServer(): McpServer {
     'slow_task',
     {
       description: 'Waits n seconds, then answers. Verifies client timeout behavior. Cap: 60s.',
+      title: 'Slow task (timeout test)',
       inputSchema: {
         seconds: z.number().min(0).max(60).default(5).describe('Wait time in seconds (max. 60)'),
       },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ seconds }, extra) => {
       const deadline = Date.now() + seconds * 1000;
@@ -103,6 +112,27 @@ function createMcpServer(): McpServer {
           ? ['values above 60 are rejected by the schema — that cap is the demonstration']
           : [`slow_task with {"seconds": ${Math.min(60, seconds * 4)}} to approach the client timeout`],
       );
+    },
+  );
+
+  // 4. log_note — SCHREIBT (ins Server-Log), aber nicht destruktiv:
+  // die "mittlere Stufe" der Tool-Annotations (readOnlyHint: false + destructiveHint: false).
+  // Ein Client kann das anders behandeln als echte destruktive Writes — ohne die explizite
+  // Angabe würde der Default (destructiveHint: true bei readOnlyHint: false) greifen.
+  server.registerTool(
+    'log_note',
+    {
+      description: 'Writes a note to the server log. The write-tier demo: it writes, but changes nothing destructively (like a draft, not a send).',
+      title: 'Write note to server log',
+      inputSchema: { note: z.string().min(1).max(500).describe('The note to write to the server log') },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ note }, extra) => {
+      const email = extra.authInfo?.extra?.email ?? 'unknown';
+      log('info', 'log_note', { note, email });
+      return respond({ logged: true, note, by: email }, [
+        'whoami to see which identity wrote this note',
+      ]);
     },
   );
 
